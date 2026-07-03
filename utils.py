@@ -6,6 +6,7 @@ import json
 import os
 import logging
 import io
+from typing import Optional
 from deep_translator import GoogleTranslator
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
