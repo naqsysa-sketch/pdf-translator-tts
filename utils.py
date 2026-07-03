@@ -1,14 +1,11 @@
-import fitz  # PyMuPDF
 import re
 import asyncio
-import edge_tts
 import requests
 import hashlib
 import json
 import os
 import logging
 import io
-import static_ffmpeg
 from deep_translator import GoogleTranslator
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +30,7 @@ logger = logging.getLogger("pdf_translator")
 # Initialize static-ffmpeg (skip on serverless — ffmpeg not available)
 if not IS_SERVERLESS:
     try:
+        import static_ffmpeg
         static_ffmpeg.add_paths()
     except Exception as e:
         logger.error(f"Failed to load static-ffmpeg paths: {e}")
@@ -191,6 +189,8 @@ def extract_chapters_from_pdf(pdf_path: str, source_lang: str = "auto"):
     and falls back to chunking pages if neither works.
     Integrates Tesseract OCR if the PDF contains scanned images/has no extractable text.
     """
+    import fitz  # PyMuPDF — lazy import for serverless compatibility
+
     doc = fitz.open(pdf_path)
     toc = doc.get_toc()  # format: [[level, title, page], ...]
     chapters = []
@@ -670,6 +670,8 @@ async def generate_tts_edge(text: str, voice: str, output_path: str, rate: str =
     """
     if AudioSegment is None:
         raise ValueError("Audio processing (pydub/ffmpeg) is not available in this environment.")
+    import edge_tts
+
     if not text.strip():
         raise ValueError("Text content is empty.")
     
