@@ -124,8 +124,8 @@ app.add_middleware(RateLimitMiddleware)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-OUTPUT_DIR = os.path.join(STATIC_DIR, "outputs")
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+OUTPUT_DIR = "/tmp/outputs" if os.getenv("VERCEL") else os.path.join(STATIC_DIR, "outputs")
+UPLOAD_DIR = "/tmp/uploads" if os.getenv("VERCEL") else os.path.join(BASE_DIR, "uploads")
 
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -587,7 +587,11 @@ def health_check(db: Session = Depends(get_db)):
     except Exception as e:
         health_status["database"] = f"down: {str(e)}"
         health_status["status"] = "unhealthy"
-        
+
+    if os.getenv("VERCEL"):
+        health_status["redis"] = "skipped (serverless)"
+        return health_status
+
     import redis
     try:
         r = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
@@ -646,4 +650,5 @@ async def cleanup_old_files():
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(cleanup_old_files())
+    if not os.getenv("VERCEL"):
+        asyncio.create_task(cleanup_old_files())

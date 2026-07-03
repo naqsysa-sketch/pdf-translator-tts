@@ -8,6 +8,12 @@
 - Redis (للمهام الخلفية)
 - FFmpeg وTesseract وPoppler (مثبتة تلقائياً في Docker)
 
+## الروابط
+
+- **GitHub:** https://github.com/naqsysa-sketch/pdf-translator-tts
+- **Vercel (تجريبي):** https://pdf-translator-tts.vercel.app
+- **الإنتاج الكامل:** راجع [DEPLOY.md](DEPLOY.md) لـ `pmi-edu.com`
+
 ## التشغيل السريع (محلي)
 
 ```bash

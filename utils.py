@@ -12,27 +12,37 @@ import static_ffmpeg
 from deep_translator import GoogleTranslator
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR = os.path.join(BASE_DIR, "uploads", "cache")
+IS_SERVERLESS = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
+CACHE_DIR = "/tmp/pdf_cache" if IS_SERVERLESS else os.path.join(BASE_DIR, "uploads", "cache")
 
-# Setup logging
+# Setup logging (file logging disabled on Vercel/serverless)
+_log_handlers = [logging.StreamHandler()]
+if not IS_SERVERLESS:
+    try:
+        _log_handlers.insert(0, logging.FileHandler(os.path.join(BASE_DIR, "app.log"), encoding="utf-8"))
+    except OSError:
+        pass
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join(BASE_DIR, "app.log"), encoding="utf-8"),
-        logging.StreamHandler()
-    ]
+    handlers=_log_handlers,
 )
 logger = logging.getLogger("pdf_translator")
 
-# Initialize static-ffmpeg
-try:
-    static_ffmpeg.add_paths()
-except Exception as e:
-    logger.error(f"Failed to load static-ffmpeg paths: {e}")
+# Initialize static-ffmpeg (skip on serverless — ffmpeg not available)
+if not IS_SERVERLESS:
+    try:
+        static_ffmpeg.add_paths()
+    except Exception as e:
+        logger.error(f"Failed to load static-ffmpeg paths: {e}")
 
 # Import AudioSegment after static_ffmpeg paths are added so pydub finds ffmpeg
-from pydub import AudioSegment
+try:
+    from pydub import AudioSegment
+except Exception as e:
+    AudioSegment = None
+    logger.warning(f"pydub unavailable: {e}")
 
 # Import prompts module
 from prompts import get_gemini_prompt, get_system_prompt
@@ -658,6 +668,8 @@ async def generate_tts_edge(text: str, voice: str, output_path: str, rate: str =
     Injects paragraph pauses (1.0s) and heading pauses (1.5s) using pydub audio stitching
     and generates matching synchronized VTT subtitles.
     """
+    if AudioSegment is None:
+        raise ValueError("Audio processing (pydub/ffmpeg) is not available in this environment.")
     if not text.strip():
         raise ValueError("Text content is empty.")
     
