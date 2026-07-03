@@ -1,0 +1,34 @@
+import pytest
+
+import config
+
+
+def test_public_config_shape(monkeypatch):
+    monkeypatch.setenv("ALLOW_REGISTRATION", "false")
+    monkeypatch.setenv("REGISTRATION_SECRET", "invite-123")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("DEEPL_API_KEY", raising=False)
+
+    payload = config.get_public_config()
+    assert payload["allow_registration"] is False
+    assert payload["requires_registration_secret"] is True
+    assert payload["configured_engines"]["gemini"] is True
+    assert payload["configured_engines"]["deepl"] is False
+
+
+def test_hide_client_api_keys_when_all_main_engines_configured(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.setenv("DEEPL_API_KEY", "d")
+    monkeypatch.setenv("OPENAI_API_KEY", "o")
+    monkeypatch.setenv("CLAUDE_API_KEY", "c")
+    monkeypatch.delenv("LIBRETRANSLATE_API_KEY", raising=False)
+
+    payload = config.get_public_config()
+    assert payload["hide_client_api_keys"] is True
+
+
+def test_claude_key_from_anthropic_alias(monkeypatch):
+    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    engines = config.get_configured_engines()
+    assert engines["claude"] is True

@@ -1,0 +1,108 @@
+# Production stack for pmi-edu.com
+# Usage: docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  web:
+    build: .
+    container_name: pdf_translator_web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/pdf_translator
+      - S3_ENDPOINT_URL=http://minio:9000
+    depends_on:
+      - redis
+      - db
+      - minio
+    networks:
+      - app_net
+
+  worker:
+    build: .
+    container_name: pdf_translator_worker
+    restart: unless-stopped
+    command: celery -A tasks worker --loglevel=info
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/pdf_translator
+      - S3_ENDPOINT_URL=http://minio:9000
+    depends_on:
+      - redis
+      - db
+      - minio
+    networks:
+      - app_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: pdf_translator_redis
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  db:
+    image: postgres:15-alpine
+    container_name: pdf_translator_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=pdf_translator
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_net
+
+  minio:
+    image: minio/minio
+    container_name: pdf_translator_minio
+    restart: unless-stopped
+    environment:
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - app_net
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: pdf_translator_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot_www:/var/www/certbot:ro
+      - certbot_certs:/etc/letsencrypt:ro
+    depends_on:
+      - web
+      - minio
+    networks:
+      - app_net
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: pdf_translator_certbot
+    volumes:
+      - certbot_www:/var/www/certbot
+      - certbot_certs:/etc/letsencrypt
+    entrypoint: /bin/sh -c
+    command: >
+      "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h; done"
+    networks:
+      - app_net
+
+volumes:
+  postgres_data:
+  minio_data:
+  certbot_www:
+  certbot_certs:
+
+networks:
+  app_net:
+    driver: bridge

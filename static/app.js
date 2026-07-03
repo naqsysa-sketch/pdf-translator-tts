@@ -1,0 +1,1503 @@
+/* ==========================================
+   State & Global Variables
+   ========================================== */
+let authToken = localStorage.getItem('auth_token') || null;
+let currentProjectId = null;
+let chaptersData = [];
+let activeChapterIndex = -1;
+let pollingInterval = null;
+let isBulkProcessing = false;
+let bulkAbortRequested = false;
+let currentUserIsAdmin = false;
+let serverConfig = {
+    allow_registration: true,
+    requires_registration_secret: false,
+    configured_engines: {}
+};
+
+// DOM Elements - Auth
+const authContainer = document.getElementById('auth-container');
+const appContainer = document.getElementById('app-container');
+const authForm = document.getElementById('auth-form');
+const authTitle = document.getElementById('auth-title');
+const authUsername = document.getElementById('auth-username');
+const authPassword = document.getElementById('auth-password');
+const authSubmitBtn = document.getElementById('auth-submit-btn');
+const authToggleBtn = document.getElementById('auth-toggle-btn');
+const authToggleWrap = document.getElementById('auth-toggle-wrap');
+const authRegistrationClosedMsg = document.getElementById('auth-registration-closed-msg');
+const authRegistrationSecretGroup = document.getElementById('auth-registration-secret-group');
+const authRegistrationSecret = document.getElementById('auth-registration-secret');
+
+// DOM Elements - User Nav
+const usernameDisplay = document.getElementById('username-display');
+const dashboardBtn = document.getElementById('dashboard-btn');
+const adminBtn = document.getElementById('admin-btn');
+const logoutBtn = document.getElementById('logout-btn');
+
+// DOM Elements - Admin
+const adminCard = document.getElementById('admin-card');
+const adminBackBtn = document.getElementById('admin-back-btn');
+const adminStatsGrid = document.getElementById('admin-stats-grid');
+const adminUsersTbody = document.getElementById('admin-users-tbody');
+const adminProjectsTbody = document.getElementById('admin-projects-tbody');
+const serverKeysBanner = document.getElementById('server-keys-banner');
+
+// DOM Elements - Dashboard
+const dashboardCard = document.getElementById('dashboard-card');
+const projectsListTbody = document.getElementById('projects-list-tbody');
+const newProjectBtn = document.getElementById('new-project-btn');
+
+// DOM Elements - Workspace
+const workspaceGrid = document.getElementById('workspace-grid');
+const uploadCard = document.getElementById('upload-card');
+const uploadZone = document.getElementById('upload-zone');
+const fileInput = document.getElementById('file-input');
+const sourceLangSelect = document.getElementById('source-lang-select');
+const fileInfo = document.getElementById('file-info');
+const uploadedFileName = document.getElementById('uploaded-file-name');
+const uploadedFileSize = document.getElementById('uploaded-file-size');
+const removeFileBtn = document.getElementById('remove-file-btn');
+
+// DOM Elements - Settings
+const settingsCard = document.getElementById('settings-card');
+const translatorSelect = document.getElementById('translator-select');
+const geminiSettings = document.getElementById('gemini-settings');
+const geminiKey = document.getElementById('gemini-key');
+const geminiModelSelect = document.getElementById('gemini-model-select');
+const customModelInputGroup = document.getElementById('custom-model-input-group');
+const customModelInput = document.getElementById('custom-model-input');
+
+const deeplSettings = document.getElementById('deepl-settings');
+const deeplKey = document.getElementById('deepl-key');
+
+const openaiSettings = document.getElementById('openai-settings');
+const openaiKey = document.getElementById('openai-key');
+const openaiModelSelect = document.getElementById('openai-model-select');
+const customOpenaiModelGroup = document.getElementById('custom-openai-model-group');
+const customOpenaiModelInput = document.getElementById('custom-openai-model-input');
+
+const claudeSettings = document.getElementById('claude-settings');
+const claudeKey = document.getElementById('claude-key');
+const claudeModelSelect = document.getElementById('claude-model-select');
+const customClaudeModelGroup = document.getElementById('custom-claude-model-group');
+const customClaudeModelInput = document.getElementById('custom-claude-model-input');
+
+const libretranslateSettings = document.getElementById('libretranslate-settings');
+const libreHost = document.getElementById('libre-host');
+const libreKey = document.getElementById('libre-key');
+
+const saveSettingsCheckbox = document.getElementById('save-settings-checkbox');
+const voiceSelect = document.getElementById('voice-select');
+const voiceRateSelect = document.getElementById('voice-rate-select');
+const previewVoiceBtn = document.getElementById('preview-voice-btn');
+
+// DOM Elements - Main Workspace Panels
+const emptyState = document.getElementById('empty-state');
+const chaptersCard = document.getElementById('chapters-card');
+const chaptersListTbody = document.getElementById('chapters-list-tbody');
+const translateAllBtn = document.getElementById('translate-all-btn');
+const stopAllBtn = document.getElementById('stop-all-btn');
+const exportZipBtn = document.getElementById('export-zip-btn');
+const exportAudiobookBtn = document.getElementById('export-audiobook-btn');
+const bulkProgressContainer = document.getElementById('bulk-progress-container');
+const bulkProgressStatus = document.getElementById('bulk-progress-status');
+const bulkProgressPercent = document.getElementById('bulk-progress-percent');
+const bulkProgressBar = document.getElementById('bulk-progress-bar');
+
+// DOM Elements - Translation Preview & Player
+const translationPreviewCard = document.getElementById('translation-preview-card');
+const activeChapterTitle = document.getElementById('active-chapter-title');
+const originalTextView = document.getElementById('original-text-view');
+const translatedTextView = document.getElementById('translated-text-view');
+const translationMethodBadge = document.getElementById('translation-method-badge');
+const mainAudioPlayer = document.getElementById('main-audio-player');
+const audioSource = document.getElementById('audio-source');
+const audioTrack = document.getElementById('audio-track');
+const subtitleSyncBox = document.getElementById('subtitle-sync-box');
+const currentSpokenText = document.getElementById('current-spoken-text');
+const downloadTextBtn = document.getElementById('download-text-btn');
+const downloadAudioBtn = document.getElementById('download-audio-btn');
+const saveTranslationBtn = document.getElementById('save-translation-btn');
+
+// Toast Notification
+const toast = document.getElementById('toast');
+const toastMessage = document.getElementById('toast-message');
+const toastIcon = document.getElementById('toast-icon');
+
+/* ==========================================
+   Initialization & Auth Routing
+   ========================================== */
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadServerConfig();
+    applyServerConfigUI();
+    initAuth();
+    initSettingsListeners();
+    loadSavedSettings();
+});
+
+async function loadServerConfig() {
+    try {
+        const res = await fetch('/api/config');
+        if (res.ok) {
+            serverConfig = await res.json();
+        }
+    } catch (err) {
+        console.warn('Could not load server config:', err);
+    }
+}
+
+function isEngineKeyConfigured(engine) {
+    return !!(serverConfig.configured_engines && serverConfig.configured_engines[engine]);
+}
+
+function setEngineKeyUI(engine, keyGroupId, badgeId) {
+    const configured = isEngineKeyConfigured(engine);
+    const keyGroup = document.getElementById(keyGroupId);
+    const badge = document.getElementById(badgeId);
+    if (keyGroup) keyGroup.style.display = configured ? 'none' : 'block';
+    if (badge) badge.style.display = configured ? 'block' : 'none';
+}
+
+function applyServerConfigUI() {
+    const keyGroupIds = [
+        'gemini-key-group', 'deepl-key-group', 'openai-key-group',
+        'claude-key-group', 'libre-key-group'
+    ];
+    const badgeIds = [
+        'gemini-server-key-badge', 'deepl-server-key-badge', 'openai-server-key-badge',
+        'claude-server-key-badge', 'libre-server-key-badge'
+    ];
+
+    if (serverConfig.hide_client_api_keys) {
+        if (serverKeysBanner) serverKeysBanner.style.display = 'block';
+        keyGroupIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+        badgeIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+    } else {
+        if (serverKeysBanner) serverKeysBanner.style.display = 'none';
+        setEngineKeyUI('gemini', 'gemini-key-group', 'gemini-server-key-badge');
+        setEngineKeyUI('deepl', 'deepl-key-group', 'deepl-server-key-badge');
+        setEngineKeyUI('openai', 'openai-key-group', 'openai-server-key-badge');
+        setEngineKeyUI('claude', 'claude-key-group', 'claude-server-key-badge');
+        setEngineKeyUI('libretranslate', 'libre-key-group', 'libre-server-key-badge');
+    }
+
+    if (!serverConfig.allow_registration) {
+        authToggleWrap.style.display = 'none';
+        authRegistrationClosedMsg.style.display = 'block';
+        authTitle.textContent = 'تسجيل الدخول';
+        authSubmitBtn.textContent = 'دخول';
+        authRegistrationSecretGroup.style.display = 'none';
+    }
+}
+
+function isRegisterMode() {
+    return authTitle.textContent === 'تسجيل حساب جديد';
+}
+
+function updateRegistrationSecretVisibility() {
+    if (!serverConfig.allow_registration) {
+        authRegistrationSecretGroup.style.display = 'none';
+        return;
+    }
+    authRegistrationSecretGroup.style.display =
+        isRegisterMode() && serverConfig.requires_registration_secret ? 'block' : 'none';
+}
+
+function initAuth() {
+    if (authToken) {
+        checkTokenAndLoadApp();
+    } else {
+        showAuthScreen();
+    }
+    
+    // Auth Form Logic
+    authForm.addEventListener('submit', handleAuthSubmit);
+    authToggleBtn.addEventListener('click', toggleAuthMode);
+    
+    // Nav Handlers
+    dashboardBtn.addEventListener('click', showDashboard);
+    adminBtn.addEventListener('click', showAdminPanel);
+    adminBackBtn.addEventListener('click', showDashboard);
+    logoutBtn.addEventListener('click', handleLogout);
+    
+    // Create project
+    newProjectBtn.addEventListener('click', startNewProjectWorkspace);
+}
+
+function showAuthScreen() {
+    authContainer.style.display = 'flex';
+    appContainer.style.display = 'none';
+}
+
+function showDashboard() {
+    stopPolling();
+    currentProjectId = null;
+    workspaceGrid.style.display = 'none';
+    adminCard.style.display = 'none';
+    dashboardCard.style.display = 'block';
+    loadUserProjects();
+}
+
+function showAdminPanel() {
+    if (!currentUserIsAdmin) return;
+    stopPolling();
+    currentProjectId = null;
+    workspaceGrid.style.display = 'none';
+    dashboardCard.style.display = 'none';
+    adminCard.style.display = 'block';
+    loadAdminPanel();
+}
+
+async function checkTokenAndLoadApp() {
+    try {
+        const res = await fetch('/api/auth/me', {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (res.ok) {
+            const data = await res.json();
+            currentUserIsAdmin = !!data.is_admin;
+            usernameDisplay.textContent = data.username;
+            adminBtn.style.display = currentUserIsAdmin ? 'inline-flex' : 'none';
+            authContainer.style.display = 'none';
+            appContainer.style.display = 'block';
+            showDashboard();
+        } else {
+            handleLogout();
+        }
+    } catch (err) {
+        showToast('فشل الاتصال بالخادم الرئيسي.', 'error');
+        handleLogout();
+    }
+}
+
+function toggleAuthMode(e) {
+    e.preventDefault();
+    if (!serverConfig.allow_registration) return;
+
+    if (authTitle.textContent === 'تسجيل الدخول') {
+        authTitle.textContent = 'تسجيل حساب جديد';
+        authSubmitBtn.textContent = 'إنشاء حساب';
+        authToggleBtn.textContent = 'تسجيل الدخول بدلاً من ذلك';
+    } else {
+        authTitle.textContent = 'تسجيل الدخول';
+        authSubmitBtn.textContent = 'دخول';
+        authToggleBtn.textContent = 'سجل الآن';
+    }
+    updateRegistrationSecretVisibility();
+}
+
+async function handleAuthSubmit(e) {
+    e.preventDefault();
+    const username = authUsername.value.trim();
+    const password = authPassword.value.trim();
+    
+    const isRegister = isRegisterMode();
+    const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
+    
+    try {
+        if (isRegister) {
+            const payload = { username, password };
+            if (serverConfig.requires_registration_secret) {
+                payload.registration_secret = authRegistrationSecret.value.trim();
+            }
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                showToast('تم التسجيل بنجاح! جاري تسجيل الدخول...', 'success');
+                // Automatically log in
+                authTitle.textContent = 'تسجيل الدخول';
+                authSubmitBtn.textContent = 'دخول';
+                authToggleBtn.textContent = 'سجل الآن';
+                handleLoginFlow(username, password);
+            } else {
+                showToast(data.detail || 'فشل التسجيل.', 'error');
+            }
+        } else {
+            await handleLoginFlow(username, password);
+        }
+    } catch (err) {
+        showToast('حدث خطأ أثناء التوثيق.', 'error');
+    }
+}
+
+async function handleLoginFlow(username, password) {
+    const formData = new URLSearchParams();
+    formData.append('username', username);
+    formData.append('password', password);
+    
+    const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData
+    });
+    
+    const data = await res.json();
+    if (res.ok && data.access_token) {
+        authToken = data.access_token;
+        localStorage.setItem('auth_token', authToken);
+        showToast('تم تسجيل الدخول بنجاح!', 'success');
+        authUsername.value = '';
+        authPassword.value = '';
+        checkTokenAndLoadApp();
+    } else {
+        showToast(data.detail || 'اسم المستخدم أو كلمة المرور غير صحيحة.', 'error');
+    }
+}
+
+function handleLogout() {
+    authToken = null;
+    currentUserIsAdmin = false;
+    adminBtn.style.display = 'none';
+    localStorage.removeItem('auth_token');
+    showAuthScreen();
+}
+
+/* ==========================================
+   Admin panel
+   ========================================== */
+async function loadAdminPanel() {
+    await Promise.all([loadAdminStats(), loadAdminUsers(), loadAdminProjects()]);
+}
+
+async function loadAdminStats() {
+    try {
+        const res = await fetch('/api/admin/stats', {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) throw new Error();
+        const stats = await res.json();
+        adminStatsGrid.innerHTML = `
+            <div class="admin-stat-card"><span class="admin-stat-label">المستخدمون</span><strong>${stats.users_count}</strong></div>
+            <div class="admin-stat-card"><span class="admin-stat-label">المشاريع</span><strong>${stats.projects_count}</strong></div>
+            <div class="admin-stat-card"><span class="admin-stat-label">الفصول</span><strong>${stats.chapters_count}</strong></div>
+            <div class="admin-stat-card"><span class="admin-stat-label">ترجمات مكتملة</span><strong>${stats.completed_translations}</strong></div>
+            <div class="admin-stat-card"><span class="admin-stat-label">ملفات صوتية</span><strong>${stats.completed_tts}</strong></div>
+        `;
+    } catch (err) {
+        showToast('فشل تحميل إحصائيات الإدارة.', 'error');
+    }
+}
+
+async function loadAdminUsers() {
+    try {
+        const res = await fetch('/api/admin/users', {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) throw new Error();
+        const users = await res.json();
+        adminUsersTbody.innerHTML = '';
+        users.forEach(user => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${user.id}</td>
+                <td><strong>${escapeHtml(user.username)}</strong></td>
+                <td>${user.is_admin ? '<span class="badge success">مسؤول</span>' : '<span class="badge warning">مستخدم</span>'}</td>
+                <td>${user.projects_count}</td>
+                <td>
+                    <button class="btn btn-sm btn-secondary danger" onclick="deleteAdminUser(${user.id})" ${user.is_admin ? 'disabled' : ''}>
+                        <i class="fa-solid fa-trash"></i> حذف
+                    </button>
+                </td>
+            `;
+            adminUsersTbody.appendChild(tr);
+        });
+    } catch (err) {
+        showToast('فشل تحميل قائمة المستخدمين.', 'error');
+    }
+}
+
+async function loadAdminProjects() {
+    try {
+        const res = await fetch('/api/admin/projects', {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) throw new Error();
+        const projects = await res.json();
+        adminProjectsTbody.innerHTML = '';
+        if (projects.length === 0) {
+            adminProjectsTbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px;">لا توجد مشاريع.</td></tr>`;
+            return;
+        }
+        projects.forEach(project => {
+            const dateStr = new Date(project.created_at).toLocaleDateString('ar-EG');
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${escapeHtml(project.filename)}</strong></td>
+                <td>${escapeHtml(project.owner)}</td>
+                <td>${escapeHtml(project.status)}</td>
+                <td style="font-family:var(--font-en);">${dateStr}</td>
+                <td>
+                    <button class="btn btn-sm btn-secondary danger" onclick="deleteAdminProject('${project.id}')">
+                        <i class="fa-solid fa-trash"></i> حذف
+                    </button>
+                </td>
+            `;
+            adminProjectsTbody.appendChild(tr);
+        });
+    } catch (err) {
+        showToast('فشل تحميل قائمة المشاريع.', 'error');
+    }
+}
+
+window.deleteAdminUser = async function(userId) {
+    if (!confirm('هل تريد حذف هذا المستخدم وجميع مشاريعه؟')) return;
+    try {
+        const res = await fetch(`/api/admin/users/${userId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showToast('تم حذف المستخدم.', 'success');
+            loadAdminPanel();
+        } else {
+            showToast(data.detail || 'فشل حذف المستخدم.', 'error');
+        }
+    } catch (err) {
+        showToast('فشل الاتصال بالخادم.', 'error');
+    }
+};
+
+window.deleteAdminProject = async function(projectId) {
+    if (!confirm('هل تريد حذف هذا المشروع نهائياً؟')) return;
+    try {
+        const res = await fetch(`/api/admin/projects/${projectId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showToast('تم حذف المشروع.', 'success');
+            loadAdminPanel();
+        } else {
+            showToast(data.detail || 'فشل حذف المشروع.', 'error');
+        }
+    } catch (err) {
+        showToast('فشل الاتصال بالخادم.', 'error');
+    }
+};
+
+/* ==========================================
+   Dashboard logic (Projects List)
+   ========================================== */
+async function loadUserProjects() {
+    try {
+        const res = await fetch('/api/projects', {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) throw new Error();
+        const projects = await res.json();
+        
+        projectsListTbody.innerHTML = '';
+        if (projects.length === 0) {
+            projectsListTbody.innerHTML = `
+                <tr>
+                    <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                        لا توجد كتب مرفوعة مسبقاً. اضغط على زر "كتاب جديد" للبدء.
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+        
+        projects.forEach(p => {
+            const dateStr = new Date(p.created_at).toLocaleDateString('ar-EG', {
+                year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+            });
+            
+            let statusBadge = '';
+            if (p.status === 'processing') {
+                statusBadge = '<span class="badge warning"><i class="fa-solid fa-spinner fa-spin"></i> جاري التقسيم...</span>';
+            } else if (p.status === 'completed') {
+                statusBadge = '<span class="badge success"><i class="fa-solid fa-circle-check"></i> جاهز</span>';
+            } else {
+                statusBadge = '<span class="badge danger"><i class="fa-solid fa-triangle-exclamation"></i> فشل</span>';
+            }
+            
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${escapeHtml(p.filename)}</strong></td>
+                <td>${statusBadge}</td>
+                <td style="font-family: var(--font-en); font-size: 0.9rem;">${dateStr}</td>
+                <td>
+                    <button class="btn btn-sm btn-primary" onclick="openProject('${p.id}')">
+                        <i class="fa-solid fa-eye"></i> عرض المشروع
+                    </button>
+                </td>
+            `;
+            projectsListTbody.appendChild(tr);
+        });
+    } catch (err) {
+        showToast('فشل تحميل المشاريع.', 'error');
+    }
+}
+
+function startNewProjectWorkspace() {
+    stopPolling();
+    currentProjectId = null;
+    chaptersData = [];
+    activeChapterIndex = -1;
+    
+    // Toggle views
+    dashboardCard.style.display = 'none';
+    workspaceGrid.style.display = 'grid';
+    uploadCard.style.display = 'block';
+    
+    // Reset Upload Container
+    fileInput.value = '';
+    uploadZone.style.display = 'block';
+    fileInfo.style.display = 'none';
+    
+    // Hide Work Panels
+    emptyState.innerHTML = `
+        <div class="empty-icon-wrap">
+            <i class="fa-solid fa-book-open"></i>
+        </div>
+        <h2>ابدأ برفع ملف PDF الخاص بك</h2>
+        <p>سيقوم نظامنا باستخراج النص وتقسيم الفصول في الخلفية عبر طوابير المهام، مع توفير خيارات الترجمة والـ TTS لكل فصل.</p>
+    `;
+    emptyState.style.display = 'flex';
+    chaptersCard.style.display = 'none';
+    translationPreviewCard.style.display = 'none';
+}
+
+function openProject(projectId) {
+    currentProjectId = projectId;
+    dashboardCard.style.display = 'none';
+    workspaceGrid.style.display = 'grid';
+    uploadCard.style.display = 'none'; // hide upload section for loaded projects
+    
+    emptyState.style.display = 'flex';
+    chaptersCard.style.display = 'none';
+    translationPreviewCard.style.display = 'none';
+    
+    // Start fetching and polling
+    fetchProjectDetails();
+    startPolling();
+}
+
+/* ==========================================
+   Polling & Task Progress Refresher
+   ========================================== */
+function startPolling() {
+    stopPolling();
+    pollingInterval = setInterval(fetchProjectDetails, 3000);
+}
+
+function stopPolling() {
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+}
+
+async function fetchProjectDetails() {
+    if (!currentProjectId) return;
+    try {
+        const res = await fetch(`/api/projects/${currentProjectId}`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) {
+            stopPolling();
+            showToast('خطأ في استرجاع تفاصيل المشروع.', 'error');
+            showDashboard();
+            return;
+        }
+        
+        const project = await res.json();
+        
+        if (project.status === 'processing') {
+            emptyState.innerHTML = `
+                <div class="empty-icon-wrap">
+                    <i class="fa-solid fa-spinner fa-spin"></i>
+                </div>
+                <h2>جاري تقسيم وفك ضغط الكتاب...</h2>
+                <p>يتم الآن معالجة وتقسيم كتاب <strong>${escapeHtml(project.filename)}</strong> في الخلفية آلياً. يرجى الانتظار.</p>
+            `;
+            emptyState.style.display = 'flex';
+            chaptersCard.style.display = 'none';
+            translationPreviewCard.style.display = 'none';
+            return;
+        }
+        
+        if (project.status === 'failed') {
+            stopPolling();
+            emptyState.innerHTML = `
+                <div class="empty-icon-wrap danger" style="color: var(--danger);">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <h2>فشلت عملية معالجة الكتاب!</h2>
+                <p>تعذر على النظام استخراج النصوص أو تقسيم الفصول. يرجى التأكد من صلاحية ملف الـ PDF والمحاولة مجدداً.</p>
+            `;
+            emptyState.style.display = 'flex';
+            chaptersCard.style.display = 'none';
+            return;
+        }
+        
+        // Render Chapters List
+        chaptersData = project.chapters;
+        renderChaptersList();
+        
+        emptyState.style.display = 'none';
+        chaptersCard.style.display = 'block';
+        
+        // Update export buttons disabled state
+        const hasAllAudio = chaptersData.every(ch => ch.tts_status === 'completed');
+        exportZipBtn.disabled = chaptersData.length === 0;
+        exportAudiobookBtn.disabled = !hasAllAudio;
+        
+        // Update active preview panels in place if someone views it
+        if (activeChapterIndex !== -1) {
+            const activeChapter = chaptersData.find(c => c.id === chaptersData[activeChapterIndex].id);
+            if (activeChapter) {
+                // Update translation view if status changed
+                const textarea = document.getElementById('translated-text-view');
+                if (activeChapter.translation_status === 'completed' && textarea.value !== activeChapter.translated_text) {
+                    textarea.value = activeChapter.translated_text;
+                    translationMethodBadge.textContent = `بواسطة ${activeChapter.translation_engine}`;
+                    translationMethodBadge.style.display = 'inline-block';
+                    if (activeChapter.translation_warning) {
+                        showToast(activeChapter.translation_warning, 'warning');
+                    }
+                }
+                
+                // Update Audio control if ready
+                const player = document.getElementById('main-audio-player');
+                const downloadAudio = document.getElementById('download-audio-btn');
+                const downloadText = document.getElementById('download-text-btn');
+                
+                downloadText.disabled = !activeChapter.translated_text;
+                
+                if (activeChapter.tts_status === 'completed') {
+                    downloadAudio.disabled = false;
+                    if (audioSource.src !== activeChapter.audio_url) {
+                        setupAudioPlayer(activeChapter.audio_url, activeChapter.vtt_url);
+                    }
+                } else {
+                    downloadAudio.disabled = true;
+                }
+            }
+        }
+        
+        // Stop polling if nothing is running in Celery worker
+        const anythingRunning = chaptersData.some(ch => 
+            ch.translation_status === 'processing' || ch.tts_status === 'processing'
+        );
+        if (!anythingRunning) {
+            stopPolling();
+        }
+        
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+/* ==========================================
+   Chapters rendering & Individual actions
+   ========================================== */
+function renderChaptersList() {
+    chaptersListTbody.innerHTML = '';
+    
+    chaptersData.forEach((ch, idx) => {
+        let transBadge = '';
+        if (ch.translation_status === 'pending') {
+            transBadge = '<span class="badge warning">معلق</span>';
+        } else if (ch.translation_status === 'processing') {
+            transBadge = '<span class="badge warning"><i class="fa-solid fa-spinner fa-spin"></i> جاري الترجمة...</span>';
+        } else if (ch.translation_status === 'completed') {
+            transBadge = `<span class="badge success"><i class="fa-solid fa-circle-check"></i> مكتمل (${escapeHtml(ch.translation_engine)})</span>`;
+        } else {
+            transBadge = '<span class="badge danger">فشل</span>';
+        }
+        
+        let ttsBadge = '';
+        if (ch.tts_status === 'pending') {
+            ttsBadge = '<span class="badge warning">معلق</span>';
+        } else if (ch.tts_status === 'processing') {
+            ttsBadge = '<span class="badge warning"><i class="fa-solid fa-spinner fa-spin"></i> جاري توليد الصوت...</span>';
+        } else if (ch.tts_status === 'completed') {
+            ttsBadge = '<span class="badge success"><i class="fa-solid fa-circle-check"></i> مكتمل</span>';
+        } else {
+            ttsBadge = '<span class="badge danger">فشل</span>';
+        }
+        
+        const isSelected = (idx === activeChapterIndex);
+        const tr = document.createElement('tr');
+        if (isSelected) tr.classList.add('active-row');
+        
+        tr.innerHTML = `
+            <td><strong>${ch.chapter_num}</strong></td>
+            <td><span class="chapter-title-span">${escapeHtml(ch.title)}</span></td>
+            <td style="font-family: var(--font-en); font-size: 0.9rem;">${ch.start_page} - ${ch.end_page}</td>
+            <td>${transBadge}</td>
+            <td>${ttsBadge}</td>
+            <td>
+                <div class="actions-group">
+                    <button class="btn btn-sm btn-secondary" onclick="showChapterPreview(${idx})">
+                        <i class="fa-solid fa-eye"></i> معاينة
+                    </button>
+                    <button class="btn btn-sm btn-primary" onclick="translateChapter(${ch.id}, ${idx})" ${ch.translation_status === 'processing' ? 'disabled' : ''}>
+                        <i class="fa-solid fa-globe"></i> ترجمة
+                    </button>
+                    <button class="btn btn-sm btn-emerald" onclick="generateTTS(${ch.id}, ${idx})" ${(ch.translation_status !== 'completed' || ch.tts_status === 'processing') ? 'disabled' : ''}>
+                        <i class="fa-solid fa-volume-high"></i> توليد صوت
+                    </button>
+                </div>
+            </td>
+        `;
+        chaptersListTbody.appendChild(tr);
+    });
+}
+
+function showChapterPreview(index) {
+    activeChapterIndex = index;
+    const chapter = chaptersData[index];
+    
+    // Mark row active
+    renderChaptersList();
+    
+    // Toggle Card show
+    translationPreviewCard.style.display = 'block';
+    
+    // Set text contents
+    activeChapterTitle.textContent = `الفصل ${chapter.chapter_num}: ${chapter.title}`;
+    originalTextView.textContent = chapter.original_text;
+    translatedTextView.value = chapter.translated_text || '';
+    
+    if (chapter.translation_status === 'completed') {
+        translationMethodBadge.textContent = `بواسطة ${chapter.translation_engine}`;
+        translationMethodBadge.style.display = 'inline-block';
+    } else {
+        translationMethodBadge.style.display = 'none';
+    }
+    
+    // Setup Audio Player
+    if (chapter.tts_status === 'completed') {
+        setupAudioPlayer(chapter.audio_url, chapter.vtt_url);
+        downloadAudioBtn.disabled = false;
+    } else {
+        resetAudioPlayer();
+        downloadAudioBtn.disabled = true;
+    }
+    
+    downloadTextBtn.disabled = !chapter.translated_text;
+    saveTranslationBtn.disabled = !chapter.translated_text;
+    
+    // Scroll down to preview smoothly
+    translationPreviewCard.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function translateChapter(chapterId, index) {
+    const engine = translatorSelect.value;
+    let apiKeyVal = null;
+    let modelVal = null;
+    let customHostVal = null;
+    
+    if (engine === 'gemini') {
+        if (!isEngineKeyConfigured('gemini')) {
+            apiKeyVal = geminiKey.value ? geminiKey.value.trim() : null;
+        }
+        modelVal = geminiModelSelect.value;
+        if (modelVal === 'custom') {
+            modelVal = customModelInput.value.trim();
+            if (!modelVal) {
+                showToast('يرجى إدخال اسم الموديل المخصص لـ Gemini.', 'error');
+                return;
+            }
+        }
+    } else if (engine === 'deepl') {
+        if (!isEngineKeyConfigured('deepl')) {
+            apiKeyVal = deeplKey.value ? deeplKey.value.trim() : null;
+            if (!apiKeyVal) {
+                showToast('مفتاح DeepL مطلوب. أضفه في .env على الخادم أو في الإعدادات.', 'error');
+                return;
+            }
+        }
+    } else if (engine === 'openai') {
+        if (!isEngineKeyConfigured('openai')) {
+            apiKeyVal = openaiKey.value ? openaiKey.value.trim() : null;
+            if (!apiKeyVal) {
+                showToast('مفتاح OpenAI مطلوب. أضفه في .env على الخادم أو في الإعدادات.', 'error');
+                return;
+            }
+        }
+        modelVal = openaiModelSelect.value;
+        if (modelVal === 'custom') {
+            modelVal = customOpenaiModelInput.value.trim();
+            if (!modelVal) {
+                showToast('يرجى إدخال اسم الموديل المخصص لـ OpenAI.', 'error');
+                return;
+            }
+        }
+    } else if (engine === 'claude') {
+        if (!isEngineKeyConfigured('claude')) {
+            apiKeyVal = claudeKey.value ? claudeKey.value.trim() : null;
+            if (!apiKeyVal) {
+                showToast('مفتاح Claude مطلوب. أضفه في .env على الخادم أو في الإعدادات.', 'error');
+                return;
+            }
+        }
+        modelVal = claudeModelSelect.value;
+        if (modelVal === 'custom') {
+            modelVal = customClaudeModelInput.value.trim();
+            if (!modelVal) {
+                showToast('يرجى إدخال اسم الموديل المخصص لـ Claude.', 'error');
+                return;
+            }
+        }
+    } else if (engine === 'libretranslate') {
+        customHostVal = libreHost.value ? libreHost.value.trim() : 'https://libretranslate.de';
+        if (!isEngineKeyConfigured('libretranslate')) {
+            apiKeyVal = libreKey.value ? libreKey.value.trim() : null;
+        }
+    }
+    
+    showToast(`بدأت ترجمة الفصل ${chaptersData[index].chapter_num} في الخلفية...`, 'info');
+    
+    try {
+        const res = await fetch('/api/translate', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                chapter_id: chapterId,
+                engine: engine,
+                api_key: apiKeyVal,
+                model: modelVal,
+                custom_host: customHostVal
+            })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            chaptersData[index].translation_status = 'processing';
+            renderChaptersList();
+            startPolling();
+        } else {
+            showToast(data.detail || 'فشل تشغيل مهمة الترجمة.', 'error');
+        }
+    } catch (err) {
+        showToast('فشل الاتصال بالخادم لطلب الترجمة.', 'error');
+    }
+}
+
+async function generateTTS(chapterId, index) {
+    const selectedVoice = voiceSelect.value;
+    const selectedRate = voiceRateSelect.value;
+    
+    showToast(`بدأ توليد الصوت للفصل ${chaptersData[index].chapter_num} في الخلفية...`, 'info');
+    
+    try {
+        const res = await fetch('/api/tts', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                chapter_id: chapterId,
+                voice: selectedVoice,
+                rate: selectedRate
+            })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            chaptersData[index].tts_status = 'processing';
+            renderChaptersList();
+            startPolling();
+        } else {
+            showToast(data.detail || 'فشل تشغيل مهمة تحويل الصوت.', 'error');
+        }
+    } catch (err) {
+        showToast('فشل الاتصال بالخادم لطلب توليد الصوت.', 'error');
+    }
+}
+
+/* ==========================================
+   Upload Book handlers
+   ========================================== */
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadZone.classList.add('dragover');
+});
+uploadZone.addEventListener('dragleave', () => {
+    uploadZone.classList.remove('dragover');
+});
+uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadZone.classList.remove('dragover');
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+        handleFileSelect(files[0]);
+    }
+});
+fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+        handleFileSelect(e.target.files[0]);
+    }
+});
+
+function handleFileSelect(file) {
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+        showToast('يرجى اختيار ملف PDF صالح فقط.', 'error');
+        return;
+    }
+    
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;
+    if (file.size > MAX_FILE_SIZE) {
+        showToast('حجم الملف كبير جداً. الحد الأقصى المسموح به هو 10 ميجابايت.', 'error');
+        return;
+    }
+    
+    uploadedFileName.textContent = file.name;
+    uploadedFileSize.textContent = formatBytes(file.size);
+    uploadZone.style.display = 'none';
+    fileInfo.style.display = 'flex';
+    
+    uploadPDFFile(file);
+}
+
+removeFileBtn.addEventListener('click', () => {
+    fileInput.value = '';
+    uploadZone.style.display = 'block';
+    fileInfo.style.display = 'none';
+    emptyState.style.display = 'flex';
+    chaptersCard.style.display = 'none';
+    translationPreviewCard.style.display = 'none';
+    stopPolling();
+    currentProjectId = null;
+    chaptersData = [];
+    activeChapterIndex = -1;
+});
+
+async function uploadPDFFile(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('source_lang', sourceLangSelect.value);
+    
+    showToast('جاري رفع ومعالجة ملف الـ PDF في الخلفية...', 'info');
+    
+    try {
+        const res = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${authToken}` },
+            body: formData
+        });
+        
+        const data = await res.json();
+        if (res.ok && data.success) {
+            currentProjectId = data.project_id;
+            showToast('تم رفع الكتاب وبدأت التجزئة في الخلفية!', 'success');
+            startPolling();
+        } else {
+            throw new Error(data.detail || 'حدث خطأ غير معروف');
+        }
+    } catch (err) {
+        showToast(`فشل رفع الملف: ${err.message}`, 'error');
+        removeFileBtn.click();
+    }
+}
+
+/* ==========================================
+   Bulk processing (Translate / TTS All)
+   ========================================== */
+function updateBulkProgress(completedSteps, totalSteps, statusText) {
+    const pct = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
+    bulkProgressPercent.textContent = `${pct}%`;
+    bulkProgressBar.style.width = `${pct}%`;
+    bulkProgressStatus.textContent = statusText;
+}
+
+function resetBulkUI() {
+    isBulkProcessing = false;
+    bulkAbortRequested = false;
+    translateAllBtn.disabled = false;
+    stopAllBtn.disabled = false;
+    stopAllBtn.style.display = 'none';
+    bulkProgressContainer.style.display = 'none';
+    bulkProgressBar.style.width = '0%';
+    bulkProgressPercent.textContent = '0%';
+}
+
+async function waitForChapterStep(chapterId, step, timeoutMs = 300000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        if (bulkAbortRequested) return false;
+        await fetchProjectDetails();
+        const chapter = chaptersData.find(ch => ch.id === chapterId);
+        if (!chapter) return false;
+
+        const status = step === 'translation' ? chapter.translation_status : chapter.tts_status;
+        if (status === 'completed') return true;
+        if (status === 'failed') return false;
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    return false;
+}
+
+translateAllBtn.addEventListener('click', async () => {
+    if (isBulkProcessing || chaptersData.length === 0) return;
+
+    isBulkProcessing = true;
+    bulkAbortRequested = false;
+    translateAllBtn.disabled = true;
+    stopAllBtn.style.display = 'inline-flex';
+    bulkProgressContainer.style.display = 'block';
+    startPolling();
+
+    const chaptersNeedingTranslation = chaptersData.filter(
+        ch => ch.translation_status !== 'completed' && ch.translation_status !== 'processing'
+    ).length;
+    const chaptersNeedingTts = chaptersData.filter(
+        ch => ch.translation_status === 'completed' && ch.tts_status !== 'completed' && ch.tts_status !== 'processing'
+    ).length;
+    const totalSteps = chaptersNeedingTranslation + chaptersNeedingTts;
+    let completedSteps = 0;
+
+    updateBulkProgress(0, totalSteps, 'بدء المعالجة الجماعية...');
+    showToast('بدأت ترجمة وتوليد الصوت لكافة الفصول بالتوالي.', 'info');
+
+    for (let i = 0; i < chaptersData.length; i++) {
+        if (bulkAbortRequested) break;
+
+        let chapter = chaptersData[i];
+
+        if (chapter.translation_status !== 'completed' && chapter.translation_status !== 'processing') {
+            updateBulkProgress(completedSteps, totalSteps, `ترجمة الفصل ${chapter.chapter_num} من ${chaptersData.length}...`);
+            await translateChapter(chapter.id, i);
+            const translated = await waitForChapterStep(chapter.id, 'translation');
+            if (!translated) {
+                if (!bulkAbortRequested) {
+                    showToast(`توقفت المعالجة عند الفصل ${chapter.chapter_num} بسبب فشل الترجمة أو انتهاء المهلة.`, 'error');
+                }
+                break;
+            }
+            completedSteps++;
+            chapter = chaptersData.find(ch => ch.id === chapter.id) || chapter;
+        }
+
+        if (bulkAbortRequested) break;
+
+        if (chapter.translation_status === 'completed' && chapter.tts_status !== 'completed' && chapter.tts_status !== 'processing') {
+            updateBulkProgress(completedSteps, totalSteps, `توليد الصوت للفصل ${chapter.chapter_num} من ${chaptersData.length}...`);
+            await generateTTS(chapter.id, i);
+            const voiced = await waitForChapterStep(chapter.id, 'tts');
+            if (!voiced) {
+                if (!bulkAbortRequested) {
+                    showToast(`توقفت المعالجة عند الفصل ${chapter.chapter_num} بسبب فشل TTS أو انتهاء المهلة.`, 'error');
+                }
+                break;
+            }
+            completedSteps++;
+        }
+    }
+
+    if (bulkAbortRequested) {
+        showToast('تم إيقاف المعالجة الجماعية.', 'info');
+    } else if (completedSteps === totalSteps) {
+        updateBulkProgress(totalSteps, totalSteps, 'اكتملت المعالجة بنجاح!');
+        showToast('اكتملت معالجة جميع الفصول الممكنة!', 'success');
+    }
+
+    resetBulkUI();
+    await fetchProjectDetails();
+});
+
+stopAllBtn.addEventListener('click', () => {
+    if (!isBulkProcessing) return;
+    bulkAbortRequested = true;
+    stopAllBtn.disabled = true;
+    showToast('جاري إيقاف المعالجة الجماعية...', 'info');
+});
+
+/* ==========================================
+   Exports (ZIP / Audiobook)
+   ========================================== */
+exportZipBtn.addEventListener('click', () => {
+    if (!currentProjectId) return;
+    showToast('جاري تحضير ملف الـ ZIP وتنزيله...', 'info');
+    const url = `/api/projects/${currentProjectId}/export-zip`;
+    
+    // Trigger download using hidden anchor
+    const a = document.createElement('a');
+    a.href = url;
+    // Pass JWT via token URL query parameters is not direct, but since our endpoint requires auth,
+    // we can append it as a query parameter or download it via fetch blobs.
+    // Let's download it via fetch to correctly pass the headers!
+    fetch(url, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+    })
+    .then(res => {
+        if (!res.ok) throw new Error();
+        return res.blob();
+    })
+    .then(blob => {
+        const blobUrl = window.URL.createObjectURL(blob);
+        a.href = blobUrl;
+        a.download = `book_project_${currentProjectId}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(blobUrl);
+        showToast('تم تحميل ملف الـ ZIP بنجاح!', 'success');
+    })
+    .catch(() => showToast('تعذر تصدير ملف ZIP.', 'error'));
+});
+
+exportAudiobookBtn.addEventListener('click', async () => {
+    if (!currentProjectId) return;
+    showToast('جاري تجميع ودمج الصوتيات لإنشاء كتاب صوتي كامل...', 'info');
+    
+    exportAudiobookBtn.disabled = true;
+    
+    try {
+        const formData = new FormData();
+        formData.append('pause_seconds', 2);
+        
+        const res = await fetch(`/api/projects/${currentProjectId}/export-audiobook`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${authToken}` },
+            body: formData
+        });
+        
+        const data = await res.json();
+        if (res.ok && data.audiobook_url) {
+            showToast('اكتمل دمج الكتاب الصوتي! سيبدأ التحميل الآن.', 'success');
+            // Download the audiobook file
+            const a = document.createElement('a');
+            a.href = data.audiobook_url;
+            a.target = '_blank';
+            a.download = `audiobook_${currentProjectId}.mp3`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        } else {
+            showToast(data.detail || 'فشل دمج الكتاب الصوتي.', 'error');
+        }
+    } catch (err) {
+        showToast('خطأ أثناء الاتصال بالخادم لدمج الكتاب الصوتي.', 'error');
+    } finally {
+        exportAudiobookBtn.disabled = false;
+    }
+});
+
+/* ==========================================
+   Voice Preview & Player Logic
+   ========================================== */
+previewVoiceBtn.addEventListener('click', async () => {
+    const selectedVoice = voiceSelect.value;
+    
+    previewVoiceBtn.disabled = true;
+    showToast('جاري توليد عينة الصوت...', 'info');
+    
+    try {
+        const res = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                chapter_id: -1,
+                voice: selectedVoice,
+                rate: "+0%"
+            })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            showToast('تم توليد عينة الصوت بنجاح!', 'success');
+            const audio = new Audio(data.audio_url);
+            audio.play();
+        } else {
+            showToast(data.detail || 'فشل توليد عينة الصوت.', 'error');
+        }
+    } catch (err) {
+        showToast('فشل الاتصال بالخادم لتوليد عينة الصوت.', 'error');
+    } finally {
+        previewVoiceBtn.disabled = false;
+    }
+});
+
+saveTranslationBtn.addEventListener('click', async () => {
+    if (activeChapterIndex === -1) return;
+    const chapter = chaptersData[activeChapterIndex];
+    const editedText = translatedTextView.value.trim();
+    if (!editedText) {
+        showToast('لا يوجد نص للحفظ.', 'error');
+        return;
+    }
+
+    saveTranslationBtn.disabled = true;
+    try {
+        const res = await fetch(`/api/chapters/${chapter.id}`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ translated_text: editedText })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            chapter.translated_text = editedText;
+            chapter.translation_status = 'completed';
+            chapter.translation_engine = chapter.translation_engine || 'manual';
+            translationMethodBadge.textContent = 'تعديل يدوي';
+            translationMethodBadge.style.display = 'inline-block';
+            downloadTextBtn.disabled = false;
+            renderChaptersList();
+            showToast('تم حفظ الترجمة المعدّلة.', 'success');
+        } else {
+            showToast(data.detail || 'فشل حفظ الترجمة.', 'error');
+        }
+    } catch (err) {
+        showToast('فشل الاتصال بالخادم أثناء حفظ الترجمة.', 'error');
+    } finally {
+        saveTranslationBtn.disabled = false;
+    }
+});
+
+translatedTextView.addEventListener('input', () => {
+    if (activeChapterIndex === -1) return;
+    saveTranslationBtn.disabled = !translatedTextView.value.trim();
+});
+
+// Download buttons
+downloadTextBtn.addEventListener('click', () => {
+    if (activeChapterIndex === -1) return;
+    const chapter = chaptersData[activeChapterIndex];
+    const textToDownload = translatedTextView.value.trim() || chapter.translated_text;
+    if (!textToDownload) return;
+
+    const blob = new Blob([textToDownload], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Chapter_${chapter.chapter_num}_Arabic.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+});
+
+downloadAudioBtn.addEventListener('click', () => {
+    if (activeChapterIndex === -1) return;
+    const chapter = chaptersData[activeChapterIndex];
+    if (!chapter.audio_url) return;
+    
+    const a = document.createElement('a');
+    a.href = chapter.audio_url;
+    a.target = '_blank';
+    a.download = `Chapter_${chapter.chapter_num}_Arabic.mp3`;
+    a.click();
+});
+
+function setupAudioPlayer(audioUrl, vttUrl) {
+    audioSource.src = audioUrl;
+    
+    // Add subtitle track if VTT exists
+    const oldTrack = document.getElementById('audio-track');
+    if (oldTrack) oldTrack.remove();
+    
+    if (vttUrl) {
+        const track = document.createElement('track');
+        track.id = 'audio-track';
+        track.kind = 'subtitles';
+        track.src = vttUrl;
+        track.srclang = 'ar';
+        track.label = 'العربية';
+        track.default = true;
+        mainAudioPlayer.appendChild(track);
+        
+        subtitleSyncBox.style.display = 'block';
+        initSubtitlesTrack();
+    } else {
+        subtitleSyncBox.style.display = 'none';
+    }
+    
+    mainAudioPlayer.load();
+}
+
+function resetAudioPlayer() {
+    audioSource.src = '';
+    const track = document.getElementById('audio-track');
+    if (track) track.remove();
+    subtitleSyncBox.style.display = 'none';
+    mainAudioPlayer.load();
+}
+
+function initSubtitlesTrack() {
+    mainAudioPlayer.addEventListener('timeupdate', () => {
+        const activeCues = mainAudioPlayer.textTracks[0]?.activeCues;
+        if (activeCues && activeCues.length > 0) {
+            currentSpokenText.textContent = activeCues[0].text;
+            subtitleSyncBox.classList.add('active');
+        } else {
+            subtitleSyncBox.classList.remove('active');
+        }
+    });
+}
+
+/* ==========================================
+   Settings Management (Local Storage)
+   ========================================== */
+function initSettingsListeners() {
+    translatorSelect.addEventListener('change', (e) => {
+        // Toggle settings panels based on engine
+        const engine = e.target.value;
+        geminiSettings.style.display = (engine === 'gemini') ? 'block' : 'none';
+        deeplSettings.style.display = (engine === 'deepl') ? 'block' : 'none';
+        openaiSettings.style.display = (engine === 'openai') ? 'block' : 'none';
+        claudeSettings.style.display = (engine === 'claude') ? 'block' : 'none';
+        libretranslateSettings.style.display = (engine === 'libretranslate') ? 'block' : 'none';
+        
+        if (saveSettingsCheckbox.checked) saveSettings();
+    });
+    
+    geminiModelSelect.addEventListener('change', (e) => {
+        customModelInputGroup.style.display = (e.target.value === 'custom') ? 'block' : 'none';
+        if (saveSettingsCheckbox.checked) saveSettings();
+    });
+    
+    openaiModelSelect.addEventListener('change', (e) => {
+        customOpenaiModelGroup.style.display = (e.target.value === 'custom') ? 'block' : 'none';
+        if (saveSettingsCheckbox.checked) saveSettings();
+    });
+    
+    claudeModelSelect.addEventListener('change', (e) => {
+        customClaudeModelGroup.style.display = (e.target.value === 'custom') ? 'block' : 'none';
+        if (saveSettingsCheckbox.checked) saveSettings();
+    });
+    
+    // Auto save on key/value changes if checkbox enabled
+    [geminiKey, customModelInput, deeplKey, openaiKey, customOpenaiModelInput, claudeKey, customClaudeModelInput, libreHost, libreKey, voiceSelect, voiceRateSelect].forEach(elem => {
+        elem.addEventListener('change', () => {
+            if (saveSettingsCheckbox.checked) saveSettings();
+        });
+    });
+    
+    saveSettingsCheckbox.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            saveSettings();
+        } else {
+            clearSavedSettings();
+        }
+    });
+}
+
+function saveSettings() {
+    const settings = {
+        engine: translatorSelect.value,
+        gemini_model: geminiModelSelect.value,
+        gemini_custom: customModelInput.value,
+        openai_model: openaiModelSelect.value,
+        openai_custom: customOpenaiModelInput.value,
+        claude_model: claudeModelSelect.value,
+        claude_custom: customClaudeModelInput.value,
+        libre_host: libreHost.value,
+        voice: voiceSelect.value,
+        rate: voiceRateSelect.value
+    };
+    localStorage.setItem('translator_settings', JSON.stringify(settings));
+    localStorage.setItem('save_settings_enabled', 'true');
+}
+
+function loadSavedSettings() {
+    const enabled = localStorage.getItem('save_settings_enabled') === 'true';
+    saveSettingsCheckbox.checked = enabled;
+    
+    if (!enabled) return;
+    
+    const settingsStr = localStorage.getItem('translator_settings');
+    if (!settingsStr) return;
+    
+    try {
+        const settings = JSON.parse(settingsStr);
+        translatorSelect.value = settings.engine || 'google';
+        translatorSelect.dispatchEvent(new Event('change'));
+        
+        geminiModelSelect.value = settings.gemini_model || 'gemini-3.5-flash';
+        geminiModelSelect.dispatchEvent(new Event('change'));
+        customModelInput.value = settings.gemini_custom || '';
+        
+        openaiModelSelect.value = settings.openai_model || 'gpt-4o-mini';
+        openaiModelSelect.dispatchEvent(new Event('change'));
+        customOpenaiModelInput.value = settings.openai_custom || '';
+        
+        claudeModelSelect.value = settings.claude_model || 'claude-3-5-sonnet-latest';
+        claudeModelSelect.dispatchEvent(new Event('change'));
+        customClaudeModelInput.value = settings.claude_custom || '';
+        
+        libreHost.value = settings.libre_host || 'https://libretranslate.de';
+        
+        voiceSelect.value = settings.voice || 'ar-SA-HamedNeural';
+        voiceRateSelect.value = settings.rate || '+0%';
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+function clearSavedSettings() {
+    localStorage.removeItem('translator_settings');
+    localStorage.removeItem('save_settings_enabled');
+}
+
+/* ==========================================
+   Utility Helpers
+   ========================================== */
+function showToast(message, type = 'info') {
+    toastMessage.textContent = message;
+    
+    // Setup Icon based on type
+    toastIcon.className = 'fa-solid';
+    if (type === 'success') {
+        toastIcon.classList.add('fa-circle-check', 'success-icon');
+        toast.className = 'toast show success';
+    } else if (type === 'error') {
+        toastIcon.classList.add('fa-circle-exclamation', 'error-icon');
+        toast.className = 'toast show error';
+    } else if (type === 'warning') {
+        toastIcon.classList.add('fa-triangle-exclamation', 'warning-icon');
+        toast.className = 'toast show warning';
+    } else {
+        toastIcon.classList.add('fa-circle-info', 'info-icon');
+        toast.className = 'toast show info';
+    }
+    
+    // Hide toast after 4.5 seconds
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 4500);
+}
+
+function formatBytes(bytes, decimals = 2) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    };
+    return text.replace(/[&<>"']/g, function(m) { return map[m]; });
+}
