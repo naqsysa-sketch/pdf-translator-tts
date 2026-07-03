@@ -5,6 +5,9 @@ import os
 import sys
 import traceback
 
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
 os.environ.setdefault("VERCEL", "1")
 os.environ.setdefault("CELERY_TASK_ALWAYS_EAGER", "true")
 os.environ.setdefault("DATABASE_URL", "sqlite:////tmp/pdf_translator.db")
@@ -13,13 +16,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-try:
-    from app import app  # noqa: F402
-except Exception as import_error:
-    from fastapi import FastAPI
-    from fastapi.responses import JSONResponse
+app = FastAPI()
 
-    app = FastAPI(title="PDF Translator (boot error)")
+try:
+    from app import app as _main_app
+    app = _main_app
+except Exception as import_error:
     _BOOT_ERROR = f"{type(import_error).__name__}: {import_error}"
     _BOOT_TRACE = traceback.format_exc()
 
