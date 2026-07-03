@@ -29,6 +29,23 @@ GEMINI_API_KEY=...
 
 5. Deploy
 
+## ربط الدومين pmi-edu.com
+
+1. Vercel Dashboard → المشروع → **Settings → Domains**
+2. أضف: `pmi-edu.com` و `www.pmi-edu.com`
+3. اتبع تعليمات DNS (A/CNAME) التي يعرضها Vercel
+4. حدّث `ALLOWED_ORIGINS` في Environment Variables:
+
+```env
+ALLOWED_ORIGINS=https://pmi-edu.com,https://www.pmi-edu.com,https://pdf-translator-tts.vercel.app
+```
+
+5. أعد النشر: `npx vercel --prod`
+
+## ربط GitHub (تحديث تلقائي عند كل push)
+
+Vercel Dashboard → **Settings → Git** → Connect `naqsysa-sketch/pdf-translator-tts`
+
 ## بعد النشر
 
 أنشئ مستخدم admin محلياً ثم استخدم التسجيل إن كان مفتوحاً، أو شغّل `create_user` على بيئة تدعم CLI.
