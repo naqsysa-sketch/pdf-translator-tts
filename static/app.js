@@ -368,7 +368,7 @@ function toggleAuthMode(e) {
 async function handleAuthSubmit(e) {
     e.preventDefault();
     const username = authUsername.value.trim();
-    const password = authPassword.value.trim();
+    const password = authPassword.value;
     
     const isRegister = isRegisterMode();
     const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
@@ -414,7 +414,7 @@ async function handleLoginFlow(username, password) {
         body: formData
     });
     
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (res.ok && data.access_token) {
         authToken = data.access_token;
         localStorage.setItem('auth_token', authToken);
