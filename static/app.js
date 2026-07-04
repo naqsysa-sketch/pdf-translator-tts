@@ -279,12 +279,23 @@ function applyServerConfigUI() {
     }
 
     if (!serverConfig.allow_registration) {
-        if (authTabRegister) authTabRegister.style.display = 'none';
-        if (authTabs) authTabs.style.gridTemplateColumns = '1fr';
+        if (authTabRegister) {
+            authTabRegister.hidden = true;
+            authTabRegister.style.display = 'none';
+        }
+        if (authTabs) {
+            authTabs.classList.add('auth-tabs--login-only');
+            authTabs.style.gridTemplateColumns = '1fr';
+        }
         if (authRegistrationClosedPanel) authRegistrationClosedPanel.hidden = false;
         setAuthMode('login', false);
-    } else if (authRegistrationClosedPanel) {
-        authRegistrationClosedPanel.hidden = true;
+    } else {
+        if (authTabRegister) {
+            authTabRegister.hidden = false;
+            authTabRegister.style.display = '';
+        }
+        if (authTabs) authTabs.classList.remove('auth-tabs--login-only');
+        if (authRegistrationClosedPanel) authRegistrationClosedPanel.hidden = true;
     }
 
     updateAuthServerBadge();
@@ -308,6 +319,7 @@ function isRegisterMode() {
 
 function setAuthMode(mode, focus = true) {
     if (!serverConfig.allow_registration && mode === 'register') {
+        showAuthAlert('التسجيل مغلق حالياً. تواصل مع مسؤول النظام لإنشاء حساب.', 'info');
         mode = 'login';
     }
     authMode = mode;

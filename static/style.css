@@ -1107,9 +1107,14 @@ textarea.text-content:focus {
     gap: 8px;
 }
 
-.auth-tab:hover {
-    color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.04);
+.auth-tabs.register-disabled .auth-tab-register,
+.auth-tabs--login-only .auth-tab-register,
+.auth-tab-register[hidden] {
+    display: none !important;
+}
+
+.auth-tabs--login-only {
+    grid-template-columns: 1fr !important;
 }
 
 .auth-tab.active {

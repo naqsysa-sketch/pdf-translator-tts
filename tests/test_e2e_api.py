@@ -89,6 +89,43 @@ def test_auth_me(auth_headers):
         assert body["is_admin"] is True
 
 
+def test_login_case_insensitive():
+    res = requests.post(
+        f"{BASE_URL}/api/auth/login",
+        data={"username": "OWNER", "password": PASSWORD},
+        timeout=30,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json().get("access_token")
+
+
+def test_config_storage_backend():
+    res = requests.get(f"{BASE_URL}/api/config", timeout=30)
+    assert res.status_code == 200
+    assert res.json().get("storage_backend") in ("supabase", "s3", "local")
+
+
+def test_register_closed_on_production():
+    res = requests.post(
+        f"{BASE_URL}/api/auth/register",
+        json={"username": "blocked_user_e2e", "password": "Test@12345"},
+        timeout=30,
+    )
+    assert res.status_code == 403
+    body = res.json()
+    assert "مغلق" in body.get("detail", "")
+
+
+def test_login_user_account():
+    res = requests.post(
+        f"{BASE_URL}/api/auth/login",
+        data={"username": "user", "password": "User@2026"},
+        timeout=30,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json().get("access_token")
+
+
 def test_upload_process_translate_tts(auth_headers, pdf_path):
     with open(pdf_path, "rb") as f:
         res = requests.post(
@@ -147,6 +184,24 @@ def test_upload_process_translate_tts(auth_headers, pdf_path):
 
     translated = _poll(translation_done, TRANSLATE_TIMEOUT, "chapter translation")
     assert any("\u0600" <= c <= "\u06FF" for c in translated["translated_text"]), "Expected Arabic text"
+
+    pdf_res = requests.get(
+        f"{BASE_URL}/api/chapters/{chapter['id']}/export-pdf",
+        headers=auth_headers,
+        timeout=60,
+    )
+    assert pdf_res.status_code == 200, pdf_res.text[:200]
+    assert pdf_res.headers.get("content-type", "").startswith("application/pdf")
+    assert pdf_res.content.startswith(b"%PDF")
+    assert len(pdf_res.content) > 500
+
+    book_pdf = requests.get(
+        f"{BASE_URL}/api/projects/{project_id}/export-pdf",
+        headers=auth_headers,
+        timeout=90,
+    )
+    assert book_pdf.status_code == 200, book_pdf.text[:200]
+    assert book_pdf.content.startswith(b"%PDF")
 
     preview = requests.post(
         f"{BASE_URL}/api/tts",
