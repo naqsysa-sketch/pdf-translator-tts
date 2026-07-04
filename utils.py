@@ -6,6 +6,7 @@ import json
 import os
 import logging
 import io
+import html as html_module
 from typing import Optional
 from deep_translator import GoogleTranslator
 
@@ -885,3 +886,63 @@ async def generate_tts_edge(text: str, voice: str, output_path: str, rate: str =
             with open(vtt_path, "w", encoding="utf-8") as f:
                 f.write("\n\n".join(vtt_parts))
             logger.info(f"Successfully generated matched VTT subtitles to {vtt_path}")
+
+
+def build_arabic_translation_pdf(
+    sections: list[tuple[str, str]],
+    book_title: str = "",
+) -> bytes:
+    """
+    Build a PDF from Arabic translation sections using PyMuPDF Story layout.
+    Each section is (title, body_text).
+    """
+    import fitz
+
+    if not sections:
+        raise ValueError("لا يوجد نص مترجم لتصديره.")
+
+    parts: list[str] = []
+    if book_title.strip():
+        parts.append(
+            f'<h1 dir="rtl" style="text-align:center;font-family:sans-serif;margin-bottom:24px">'
+            f"{html_module.escape(book_title.strip())}</h1>"
+        )
+
+    for index, (title, body) in enumerate(sections):
+        if not (body or "").strip():
+            continue
+        if title.strip():
+            parts.append(
+                f'<h2 dir="rtl" style="text-align:right;font-family:sans-serif;margin-top:20px">'
+                f"{html_module.escape(title.strip())}</h2>"
+            )
+        escaped = html_module.escape(body.strip()).replace("\n", "<br/>")
+        parts.append(
+            '<p dir="rtl" style="text-align:right;font-family:sans-serif;'
+            'font-size:13px;line-height:1.75;margin-top:8px">'
+            f"{escaped}</p>"
+        )
+        if index + 1 < len(sections):
+            parts.append('<div style="page-break-before:always"></div>')
+
+    if not parts:
+        raise ValueError("لا يوجد نص مترجم لتصديره.")
+
+    story_html = f"<body style='direction:rtl'>{''.join(parts)}</body>"
+    buffer = io.BytesIO()
+    writer = fitz.DocumentWriter(buffer)
+    story = fitz.Story(html=story_html)
+    page_size = fitz.paper_rect("a4")
+    margin = 50
+    content_rect = page_size + (margin, margin, -margin, -margin)
+
+    while True:
+        device = writer.begin_page(page_size)
+        more, _ = story.place(content_rect)
+        story.draw(device)
+        writer.end_page()
+        if not more:
+            break
+
+    writer.close()
+    return buffer.getvalue()

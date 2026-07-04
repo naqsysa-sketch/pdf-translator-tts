@@ -6,6 +6,7 @@ import pytest
 
 from utils import (
     assess_translation_completeness,
+    build_arabic_translation_pdf,
     calculate_text_hash,
     chunk_text,
     extract_chapters_from_pdf,
@@ -88,6 +89,26 @@ def test_complete_translation_is_cached():
     cached_text, cached_method = get_cached_translation(source, "google")
     assert cached_text == translated
     assert cached_method == "google"
+
+
+def test_build_arabic_translation_pdf_single_chapter():
+    pdf_bytes = build_arabic_translation_pdf(
+        [("الفصل 1", "هذا نص عربي تجريبي للتصدير إلى PDF.")]
+    )
+    assert pdf_bytes.startswith(b"%PDF")
+    assert len(pdf_bytes) > 500
+
+
+def test_build_arabic_translation_pdf_full_book():
+    pdf_bytes = build_arabic_translation_pdf(
+        [
+            ("الفصل 1", "محتوى الفصل الأول."),
+            ("الفصل 2", "محتوى الفصل الثاني مع جمل إضافية."),
+        ],
+        book_title="كتاب تجريبي",
+    )
+    assert pdf_bytes.startswith(b"%PDF")
+    assert len(pdf_bytes) > 800
 
 
 def test_extract_chapters_page_range(tmp_path):

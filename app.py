@@ -53,7 +53,7 @@ from config import (
     is_registration_allowed,
 )
 from tasks import process_pdf_task, translate_chapter_task, generate_tts_task, reextract_pdf_task
-from utils import generate_tts_edge
+from utils import generate_tts_edge, build_arabic_translation_pdf
 from storage import (
     upload_file_to_s3,
     resolve_media_url,
@@ -485,6 +485,81 @@ async def generate_audio(
     
     return {"success": True, "message": "بدأت عملية تحويل الصوت في الخلفية."}
 
+
+def _translated_sections(chapters) -> list[tuple[str, str]]:
+    sections = []
+    for ch in chapters:
+        if ch.translated_text and ch.translated_text.strip():
+            title = f"الفصل {ch.chapter_num}: {ch.title}" if ch.title else f"الفصل {ch.chapter_num}"
+            sections.append((title, ch.translated_text))
+    return sections
+
+
+def _pdf_streaming_response(pdf_bytes: bytes, filename: str) -> StreamingResponse:
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/chapters/{chapter_id}/export-pdf")
+def export_chapter_pdf(
+    chapter_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    chapter = db.query(models.Chapter).join(models.Project).filter(
+        models.Chapter.id == chapter_id,
+        models.Project.user_id == current_user.id,
+    ).first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="الفصل غير موجود.")
+    if not chapter.translated_text or not chapter.translated_text.strip():
+        raise HTTPException(status_code=400, detail="يرجى ترجمة الفصل أولاً.")
+
+    title = f"الفصل {chapter.chapter_num}: {chapter.title}" if chapter.title else f"الفصل {chapter.chapter_num}"
+    try:
+        pdf_bytes = build_arabic_translation_pdf([(title, chapter.translated_text)])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return _pdf_streaming_response(pdf_bytes, f"Chapter_{chapter.chapter_num}_Arabic.pdf")
+
+
+@app.get("/api/projects/{project_id}/export-pdf")
+def export_project_pdf(
+    project_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = db.query(models.Project).filter(
+        models.Project.id == project_id,
+        models.Project.user_id == current_user.id,
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="المشروع غير موجود.")
+
+    chapters = (
+        db.query(models.Chapter)
+        .filter(models.Chapter.project_id == project_id)
+        .order_by(models.Chapter.chapter_num.asc())
+        .all()
+    )
+    sections = _translated_sections(chapters)
+    if not sections:
+        raise HTTPException(status_code=400, detail="لا توجد فصول مترجمة لتصديرها كـ PDF.")
+
+    book_title = project.filename or f"مشروع {project_id}"
+    try:
+        pdf_bytes = build_arabic_translation_pdf(sections, book_title=book_title)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in book_title)[:80] or project_id
+    return _pdf_streaming_response(pdf_bytes, f"{safe_name}_Arabic.pdf")
+
+
 @app.get("/api/projects/{project_id}/export-zip")
 def export_project_zip(
     project_id: str,
@@ -503,11 +578,26 @@ def export_project_zip(
             if ch.translated_text and ch.translated_text.strip():
                 txt_filename = f"Chapter_{ch.chapter_num}_Arabic.txt"
                 zip_file.writestr(txt_filename, ch.translated_text)
+                title = f"الفصل {ch.chapter_num}: {ch.title}" if ch.title else f"الفصل {ch.chapter_num}"
+                try:
+                    pdf_bytes = build_arabic_translation_pdf([(title, ch.translated_text)])
+                    zip_file.writestr(f"Chapter_{ch.chapter_num}_Arabic.pdf", pdf_bytes)
+                except ValueError:
+                    pass
                 
             if ch.audio_url:
                 audio_data = read_stored_file(ch.audio_url, OUTPUT_DIR)
                 if audio_data:
                     zip_file.writestr(f"Chapter_{ch.chapter_num}_Arabic.mp3", audio_data)
+
+        sections = _translated_sections(chapters)
+        if sections:
+            book_title = project.filename or f"project_{project_id}"
+            try:
+                full_pdf = build_arabic_translation_pdf(sections, book_title=book_title)
+                zip_file.writestr("Book_Arabic_Full.pdf", full_pdf)
+            except ValueError:
+                pass
                     
     zip_buffer.seek(0)
     return StreamingResponse(

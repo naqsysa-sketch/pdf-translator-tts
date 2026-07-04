@@ -112,6 +112,7 @@ const reextractPageTo = document.getElementById('reextract-page-to');
 const reextractBtn = document.getElementById('reextract-btn');
 const stopAllBtn = document.getElementById('stop-all-btn');
 const exportZipBtn = document.getElementById('export-zip-btn');
+const exportPdfBtn = document.getElementById('export-pdf-btn');
 const exportAudiobookBtn = document.getElementById('export-audiobook-btn');
 const bulkProgressContainer = document.getElementById('bulk-progress-container');
 const bulkProgressStatus = document.getElementById('bulk-progress-status');
@@ -130,6 +131,7 @@ const audioTrack = document.getElementById('audio-track');
 const subtitleSyncBox = document.getElementById('subtitle-sync-box');
 const currentSpokenText = document.getElementById('current-spoken-text');
 const downloadTextBtn = document.getElementById('download-text-btn');
+const downloadPdfBtn = document.getElementById('download-pdf-btn');
 const downloadAudioBtn = document.getElementById('download-audio-btn');
 const saveTranslationBtn = document.getElementById('save-translation-btn');
 
@@ -739,7 +741,11 @@ async function fetchProjectDetails() {
         
         // Update export buttons disabled state
         const hasAllAudio = chaptersData.every(ch => ch.tts_status === 'completed');
+        const hasAnyTranslation = chaptersData.some(
+            ch => ch.translation_status === 'completed' && ch.translated_text && ch.translated_text.trim()
+        );
         exportZipBtn.disabled = chaptersData.length === 0;
+        exportPdfBtn.disabled = !hasAnyTranslation;
         exportAudiobookBtn.disabled = !hasAllAudio;
         
         // Update active preview panels in place if someone views it
@@ -767,6 +773,10 @@ async function fetchProjectDetails() {
                 const downloadText = document.getElementById('download-text-btn');
                 
                 downloadText.disabled = !activeChapter.translated_text;
+                const downloadPdf = document.getElementById('download-pdf-btn');
+                if (downloadPdf) {
+                    downloadPdf.disabled = !activeChapter.translated_text;
+                }
                 
                 if (activeChapter.tts_status === 'completed') {
                     downloadAudio.disabled = false;
@@ -892,6 +902,7 @@ function showChapterPreview(index) {
     }
     
     downloadTextBtn.disabled = !chapter.translated_text;
+    downloadPdfBtn.disabled = !chapter.translated_text;
     saveTranslationBtn.disabled = !chapter.translated_text;
     
     // Scroll down to preview smoothly
@@ -1319,37 +1330,55 @@ stopAllBtn.addEventListener('click', () => {
 });
 
 /* ==========================================
-   Exports (ZIP / Audiobook)
+   Authenticated file download helper
    ========================================== */
-exportZipBtn.addEventListener('click', () => {
-    if (!currentProjectId) return;
-    showToast('جاري تحضير ملف الـ ZIP وتنزيله...', 'info');
-    const url = `/api/projects/${currentProjectId}/export-zip`;
-    
-    // Trigger download using hidden anchor
-    const a = document.createElement('a');
-    a.href = url;
-    // Pass JWT via token URL query parameters is not direct, but since our endpoint requires auth,
-    // we can append it as a query parameter or download it via fetch blobs.
-    // Let's download it via fetch to correctly pass the headers!
-    fetch(url, {
-        headers: { 'Authorization': `Bearer ${authToken}` }
-    })
-    .then(res => {
-        if (!res.ok) throw new Error();
-        return res.blob();
-    })
-    .then(blob => {
+async function downloadAuthenticatedFile(url, filename, successMessage) {
+    showToast('جاري تحضير الملف...', 'info');
+    try {
+        const res = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!res.ok) {
+            const { data, text } = await readApiResponse(res);
+            throw new Error((data && data.detail) || text || 'تعذر التحميل');
+        }
+        const blob = await res.blob();
         const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
         a.href = blobUrl;
-        a.download = `book_project_${currentProjectId}.zip`;
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(blobUrl);
-        showToast('تم تحميل ملف الـ ZIP بنجاح!', 'success');
-    })
-    .catch(() => showToast('تعذر تصدير ملف ZIP.', 'error'));
+        if (successMessage) showToast(successMessage, 'success');
+    } catch (err) {
+        showToast(err.message || 'تعذر تحميل الملف.', 'error');
+    }
+}
+
+/* ==========================================
+   Exports (ZIP / PDF / Audiobook)
+   ========================================== */
+exportZipBtn.addEventListener('click', () => {
+    if (!currentProjectId) return;
+    downloadAuthenticatedFile(
+        `/api/projects/${currentProjectId}/export-zip`,
+        `book_project_${currentProjectId}.zip`,
+        'تم تحميل ملف ZIP بنجاح!'
+    );
+});
+
+exportPdfBtn.addEventListener('click', () => {
+    if (!currentProjectId) return;
+    const bookName = (uploadedFileName && uploadedFileName.textContent)
+        ? uploadedFileName.textContent.replace(/\.pdf$/i, '_Arabic.pdf')
+        : `book_${currentProjectId}_Arabic.pdf`;
+    downloadAuthenticatedFile(
+        `/api/projects/${currentProjectId}/export-pdf`,
+        bookName,
+        'تم تحميل كتاب PDF العربي بنجاح!'
+    );
 });
 
 exportAudiobookBtn.addEventListener('click', async () => {
@@ -1484,6 +1513,17 @@ downloadTextBtn.addEventListener('click', () => {
     a.download = `Chapter_${chapter.chapter_num}_Arabic.txt`;
     a.click();
     URL.revokeObjectURL(url);
+});
+
+downloadPdfBtn.addEventListener('click', () => {
+    if (activeChapterIndex === -1) return;
+    const chapter = chaptersData[activeChapterIndex];
+    if (!chapter.translated_text) return;
+    downloadAuthenticatedFile(
+        `/api/chapters/${chapter.id}/export-pdf`,
+        `Chapter_${chapter.chapter_num}_Arabic.pdf`,
+        'تم تحميل PDF الفصل بنجاح!'
+    );
 });
 
 downloadAudioBtn.addEventListener('click', () => {

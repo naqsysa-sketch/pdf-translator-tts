@@ -375,6 +375,7 @@
                             <button id="translate-all-btn" class="btn btn-secondary"><i class="fa-solid fa-globe"></i> ترجمة وتحويل الكل</button>
                             <button id="stop-all-btn" class="btn btn-secondary danger" style="display: none;"><i class="fa-solid fa-circle-stop"></i> إيقاف</button>
                             <button id="export-zip-btn" class="btn btn-secondary"><i class="fa-solid fa-file-zipper"></i> تصدير ZIP</button>
+                            <button id="export-pdf-btn" class="btn btn-secondary" disabled><i class="fa-solid fa-file-pdf"></i> تصدير PDF كامل</button>
                             <button id="export-audiobook-btn" class="btn btn-secondary"><i class="fa-solid fa-music"></i> تصدير كتاب صوتي</button>
                         </div>
                     </div>
@@ -468,7 +469,10 @@
                         </div>
                         <div class="downloads-wrapper">
                             <button id="download-text-btn" class="btn btn-secondary" disabled>
-                                <i class="fa-solid fa-file-arrow-down"></i> تحميل النص المترجم (.txt)
+                                <i class="fa-solid fa-file-arrow-down"></i> تحميل النص (.txt)
+                            </button>
+                            <button id="download-pdf-btn" class="btn btn-secondary" disabled>
+                                <i class="fa-solid fa-file-pdf"></i> تحميل PDF
                             </button>
                             <button id="download-audio-btn" class="btn btn-emerald" disabled>
                                 <i class="fa-solid fa-circle-down"></i> تحميل الملف الصوتي (.mp3)
@@ -487,6 +491,6 @@
     </div>
 
     <!-- Main JavaScript -->
-    <script src="app.js?v=1.4"></script>
+    <script src="app.js?v=1.5"></script>
 </body>
 </html>
