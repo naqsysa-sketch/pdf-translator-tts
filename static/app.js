@@ -1332,25 +1332,54 @@ stopAllBtn.addEventListener('click', () => {
 /* ==========================================
    Authenticated file download helper
    ========================================== */
-async function downloadAuthenticatedFile(url, filename, successMessage) {
+async function downloadAuthenticatedFile(url, filename, successMessage, expectedMimeParts = []) {
     showToast('جاري تحضير الملف...', 'info');
     try {
         const res = await fetch(url, {
             headers: { 'Authorization': `Bearer ${authToken}` }
         });
+        if (res.status === 401) {
+            throw new Error('انتهت الجلسة. سجّل الدخول مجدداً ثم أعد المحاولة.');
+        }
         if (!res.ok) {
             const { data, text } = await readApiResponse(res);
             throw new Error((data && data.detail) || text || 'تعذر التحميل');
         }
-        const blob = await res.blob();
+
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+        if (expectedMimeParts.length && !expectedMimeParts.some((part) => contentType.includes(part))) {
+            throw new Error('الملف المستلم غير صالح. أعد تسجيل الدخول وحاول مرة أخرى.');
+        }
+
+        const buffer = await res.arrayBuffer();
+        if (!buffer.byteLength) {
+            throw new Error('الملف فارغ.');
+        }
+
+        const mimeType = contentType.split(';')[0] || 'application/octet-stream';
+        const blob = new Blob([buffer], { type: mimeType });
         const blobUrl = window.URL.createObjectURL(blob);
+        const safeName = (filename || 'download').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');
         const a = document.createElement('a');
         a.href = blobUrl;
-        a.download = filename;
+        a.download = safeName;
+        a.style.display = 'none';
         document.body.appendChild(a);
         a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(blobUrl);
+
+        // Opening PDF in a new tab helps when the browser blocks programmatic downloads.
+        if (mimeType.includes('pdf')) {
+            const viewer = window.open(blobUrl, '_blank', 'noopener,noreferrer');
+            if (!viewer) {
+                showToast('إذا لم يبدأ التحميل، اسمح بالنوافذ المنبثقة ثم أعد المحاولة.', 'warning');
+            }
+        }
+
+        setTimeout(() => {
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(blobUrl);
+        }, 4000);
+
         if (successMessage) showToast(successMessage, 'success');
     } catch (err) {
         showToast(err.message || 'تعذر تحميل الملف.', 'error');
@@ -1365,7 +1394,8 @@ exportZipBtn.addEventListener('click', () => {
     downloadAuthenticatedFile(
         `/api/projects/${currentProjectId}/export-zip`,
         `book_project_${currentProjectId}.zip`,
-        'تم تحميل ملف ZIP بنجاح!'
+        'تم تحميل ملف ZIP بنجاح!',
+        ['zip', 'octet-stream']
     );
 });
 
@@ -1377,7 +1407,8 @@ exportPdfBtn.addEventListener('click', () => {
     downloadAuthenticatedFile(
         `/api/projects/${currentProjectId}/export-pdf`,
         bookName,
-        'تم تحميل كتاب PDF العربي بنجاح!'
+        'تم تحميل كتاب PDF العربي بنجاح!',
+        ['pdf']
     );
 });
 
@@ -1522,7 +1553,8 @@ downloadPdfBtn.addEventListener('click', () => {
     downloadAuthenticatedFile(
         `/api/chapters/${chapter.id}/export-pdf`,
         `Chapter_${chapter.chapter_num}_Arabic.pdf`,
-        'تم تحميل PDF الفصل بنجاح!'
+        'تم تحميل PDF الفصل بنجاح!',
+        ['pdf']
     );
 });
 
