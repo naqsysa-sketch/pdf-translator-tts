@@ -168,6 +168,29 @@ class UserRegister(BaseModel):
     password: str
     registration_secret: Optional[str] = None
 
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+def _normalize_username(username: str) -> str:
+    return username.strip()
+
+
+def _validate_username_format(username: str) -> None:
+    import re
+
+    if len(username) < 3:
+        raise HTTPException(status_code=400, detail="اسم المستخدم يجب أن يكون 3 أحرف على الأقل.")
+    if len(username) > 50:
+        raise HTTPException(status_code=400, detail="اسم المستخدم طويل جداً (50 حرفاً كحد أقصى).")
+    if not re.fullmatch(r"[a-zA-Z0-9_]+", username):
+        raise HTTPException(
+            status_code=400,
+            detail="اسم المستخدم يجب أن يحتوي على حروف إنجليزية وأرقام و _ فقط.",
+        )
+
 # --- Public configuration ---
 
 @app.get("/api/config")
@@ -188,16 +211,17 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     if required_secret and user_data.registration_secret != required_secret:
         raise HTTPException(status_code=403, detail="رمز التسجيل غير صحيح.")
 
-    if len(user_data.username.strip()) < 3:
-        raise HTTPException(status_code=400, detail="اسم المستخدم يجب أن يكون 3 أحرف على الأقل.")
     if len(user_data.password) < 6:
         raise HTTPException(status_code=400, detail="كلمة المرور يجب أن تكون 6 أحرف على الأقل.")
 
-    existing_user = db.query(models.User).filter(models.User.username == user_data.username).first()
+    username = _normalize_username(user_data.username)
+    _validate_username_format(username)
+
+    existing_user = db.query(models.User).filter(func.lower(models.User.username) == username.lower()).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="اسم المستخدم مسجل مسبقاً.")
     hashed_pwd = get_password_hash(user_data.password)
-    new_user = models.User(username=user_data.username, hashed_password=hashed_pwd)
+    new_user = models.User(username=username, hashed_password=hashed_pwd)
     db.add(new_user)
     db.commit()
     return {"success": True, "message": "تم تسجيل الحساب بنجاح!"}
@@ -244,13 +268,32 @@ def serialize_chapter(chapter: models.Chapter) -> dict:
 
 @app.post("/api/auth/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    username = form_data.username.strip()
+    username = _normalize_username(form_data.username)
     password = form_data.password
     user = db.query(models.User).filter(func.lower(models.User.username) == username.lower()).first()
     if not user or not verify_password(password, user.hashed_password):
         raise HTTPException(status_code=400, detail="اسم المستخدم أو كلمة المرور غير صحيحة.")
     access_token = create_access_token(data={"sub": user.username})
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/api/auth/change-password")
+def change_password(
+    request: ChangePasswordRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if len(request.new_password) < 6:
+        raise HTTPException(status_code=400, detail="كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل.")
+    if not verify_password(request.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="كلمة المرور الحالية غير صحيحة.")
+    if verify_password(request.new_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="كلمة المرور الجديدة يجب أن تكون مختلفة عن الحالية.")
+
+    current_user.hashed_password = get_password_hash(request.new_password)
+    db.commit()
+    return {"success": True, "message": "تم تحديث كلمة المرور بنجاح."}
+
 
 @app.get("/api/auth/me")
 def get_me(current_user: models.User = Depends(get_current_user)):

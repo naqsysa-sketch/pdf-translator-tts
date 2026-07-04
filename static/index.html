@@ -18,33 +18,162 @@
     
     <!-- Authentication Card (Login / Register Overlay) -->
     <div class="auth-container" id="auth-container">
-        <div class="card glass-card auth-card">
-            <div class="auth-logo-wrapper">
-                <i class="fa-solid fa-wand-magic-sparkles auth-logo-icon"></i>
-                <h1 class="gradient-text auth-logo">مترجم الكتب الصوتية</h1>
+        <div class="auth-shell">
+            <div class="card glass-card auth-card">
+                <header class="auth-header">
+                    <div class="auth-logo-wrapper">
+                        <div class="auth-logo-badge">
+                            <i class="fa-solid fa-wand-magic-sparkles auth-logo-icon"></i>
+                        </div>
+                        <div class="auth-brand-text">
+                            <h1 class="gradient-text auth-logo">مترجم الكتب الصوتية</h1>
+                            <p class="auth-tagline">ترجمة عربية ذكية وتحويل PDF إلى كتب صوتية</p>
+                        </div>
+                    </div>
+                </header>
+
+                <nav class="auth-tabs" id="auth-tabs" role="tablist" aria-label="نوع الحساب">
+                    <button type="button" class="auth-tab active" id="auth-tab-login" data-mode="login" role="tab" aria-selected="true">
+                        <i class="fa-solid fa-right-to-bracket"></i> تسجيل الدخول
+                    </button>
+                    <button type="button" class="auth-tab" id="auth-tab-register" data-mode="register" role="tab" aria-selected="false">
+                        <i class="fa-solid fa-user-plus"></i> إنشاء حساب
+                    </button>
+                </nav>
+
+                <div id="auth-alert" class="auth-alert" role="alert" hidden></div>
+
+                <form id="auth-form" novalidate>
+                    <div class="auth-field">
+                        <label for="auth-username">اسم المستخدم</label>
+                        <div class="auth-input-wrap">
+                            <i class="fa-solid fa-user auth-field-icon" aria-hidden="true"></i>
+                            <input
+                                type="text"
+                                id="auth-username"
+                                class="form-control auth-input"
+                                placeholder="مثال: owner"
+                                autocomplete="username"
+                                minlength="3"
+                                maxlength="50"
+                                required
+                            >
+                        </div>
+                        <p class="auth-hint" id="auth-username-hint">3 أحرف على الأقل — حروف إنجليزية وأرقام و _ فقط</p>
+                        <p class="auth-field-error" id="auth-username-error" hidden></p>
+                    </div>
+
+                    <div class="auth-field">
+                        <label for="auth-password">كلمة المرور</label>
+                        <div class="auth-input-wrap">
+                            <i class="fa-solid fa-lock auth-field-icon" aria-hidden="true"></i>
+                            <input
+                                type="password"
+                                id="auth-password"
+                                class="form-control auth-input"
+                                placeholder="أدخل كلمة المرور"
+                                autocomplete="current-password"
+                                minlength="6"
+                                required
+                            >
+                            <button type="button" class="auth-password-toggle" id="auth-password-toggle" aria-label="إظهار كلمة المرور" title="إظهار/إخفاء">
+                                <i class="fa-solid fa-eye" id="auth-password-toggle-icon"></i>
+                            </button>
+                        </div>
+                        <div class="auth-strength" id="auth-password-strength" hidden>
+                            <div class="auth-strength-bar"><span id="auth-strength-fill"></span></div>
+                            <span id="auth-strength-label" class="auth-strength-label"></span>
+                        </div>
+                        <p class="auth-field-error" id="auth-password-error" hidden></p>
+                    </div>
+
+                    <div class="auth-field" id="auth-confirm-password-group" hidden>
+                        <label for="auth-confirm-password">تأكيد كلمة المرور</label>
+                        <div class="auth-input-wrap">
+                            <i class="fa-solid fa-shield-halved auth-field-icon" aria-hidden="true"></i>
+                            <input
+                                type="password"
+                                id="auth-confirm-password"
+                                class="form-control auth-input"
+                                placeholder="أعد إدخال كلمة المرور"
+                                autocomplete="new-password"
+                                minlength="6"
+                            >
+                        </div>
+                        <p class="auth-field-error" id="auth-confirm-password-error" hidden></p>
+                    </div>
+
+                    <div class="auth-field" id="auth-registration-secret-group" hidden>
+                        <label for="auth-registration-secret">رمز التسجيل</label>
+                        <div class="auth-input-wrap">
+                            <i class="fa-solid fa-key auth-field-icon" aria-hidden="true"></i>
+                            <input
+                                type="password"
+                                id="auth-registration-secret"
+                                class="form-control auth-input"
+                                placeholder="الرمز المقدّم من مسؤول النظام"
+                                autocomplete="off"
+                            >
+                        </div>
+                        <p class="auth-hint">مطلوب عند تفعيل التسجيل المحمي على الخادم</p>
+                        <p class="auth-field-error" id="auth-registration-secret-error" hidden></p>
+                    </div>
+
+                    <div class="auth-options" id="auth-login-options">
+                        <label class="auth-checkbox">
+                            <input type="checkbox" id="auth-remember-me" checked>
+                            <span>تذكر اسم المستخدم على هذا الجهاز</span>
+                        </label>
+                    </div>
+
+                    <button type="submit" id="auth-submit-btn" class="btn btn-primary btn-full auth-submit-btn">
+                        <span class="auth-submit-label" id="auth-submit-label">دخول</span>
+                        <i class="fa-solid fa-spinner fa-spin auth-submit-spinner" id="auth-submit-spinner" hidden></i>
+                    </button>
+                </form>
+
+                <div class="auth-registration-closed" id="auth-registration-closed-panel" hidden>
+                    <i class="fa-solid fa-lock"></i>
+                    <div>
+                        <strong>التسجيل مغلق حالياً</strong>
+                        <p>استخدم حساباً موجوداً أو تواصل مع مسؤول النظام لإنشاء حساب جديد.</p>
+                    </div>
+                </div>
+
+                <footer class="auth-footer">
+                    <span class="auth-footer-badge" id="auth-server-badge">
+                        <i class="fa-solid fa-circle-check"></i> الخادم متصل
+                    </span>
+                </footer>
             </div>
-            <h2 id="auth-title">تسجيل الدخول</h2>
-            
-            <form id="auth-form">
-                <div class="form-group">
-                    <label for="auth-username">اسم المستخدم:</label>
-                    <input type="text" id="auth-username" class="form-control" placeholder="أدخل اسم المستخدم" required>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div id="change-password-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <div class="modal-card glass-card auth-modal-card">
+            <div class="modal-header-flex">
+                <h3><i class="fa-solid fa-key"></i> تغيير كلمة المرور</h3>
+                <button type="button" id="change-password-close" class="btn btn-sm btn-secondary" aria-label="إغلاق">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <form id="change-password-form">
+                <div class="auth-field">
+                    <label for="current-password">كلمة المرور الحالية</label>
+                    <input type="password" id="current-password" class="form-control auth-input" autocomplete="current-password" required>
                 </div>
-                <div class="form-group">
-                    <label for="auth-password">كلمة المرور:</label>
-                    <input type="password" id="auth-password" class="form-control" placeholder="أدخل كلمة المرور" required>
+                <div class="auth-field">
+                    <label for="new-password">كلمة المرور الجديدة</label>
+                    <input type="password" id="new-password" class="form-control auth-input" autocomplete="new-password" minlength="6" required>
                 </div>
-                <div class="form-group" id="auth-registration-secret-group" style="display: none;">
-                    <label for="auth-registration-secret">رمز التسجيل:</label>
-                    <input type="password" id="auth-registration-secret" class="form-control" placeholder="أدخل رمز التسجيل المقدّم من المسؤول">
+                <div class="auth-field">
+                    <label for="new-password-confirm">تأكيد كلمة المرور الجديدة</label>
+                    <input type="password" id="new-password-confirm" class="form-control auth-input" autocomplete="new-password" minlength="6" required>
                 </div>
-                <button type="submit" id="auth-submit-btn" class="btn btn-primary btn-full">دخول</button>
+                <p class="auth-field-error" id="change-password-error" hidden></p>
+                <button type="submit" class="btn btn-primary btn-full" id="change-password-submit">حفظ كلمة المرور</button>
             </form>
-            
-            <p class="auth-toggle" id="auth-toggle-wrap">ليس لديك حساب؟ <a href="#" id="auth-toggle-btn">سجل الآن</a></p>
-            <p class="auth-toggle" id="auth-registration-closed-msg" style="display: none; color: var(--text-muted);">
-                التسجيل مغلق. يرجى استخدام حساب موجود أو التواصل مع مسؤول النظام.
-            </p>
         </div>
     </div>
     
@@ -62,6 +191,7 @@
             <div class="user-nav" id="user-nav">
                 <span>مرحباً، <strong id="username-display">المستخدم</strong> ✨</span>
                 <div class="user-nav-actions">
+                    <button id="change-password-btn" class="btn btn-secondary btn-sm"><i class="fa-solid fa-key"></i> كلمة المرور</button>
                     <button id="admin-btn" class="btn btn-secondary btn-sm" style="display: none;"><i class="fa-solid fa-user-shield"></i> لوحة الإدارة</button>
                     <button id="dashboard-btn" class="btn btn-secondary btn-sm"><i class="fa-solid fa-gauge"></i> مشاريعي</button>
                     <button id="logout-btn" class="btn btn-secondary danger btn-sm"><i class="fa-solid fa-right-from-bracket"></i> خروج</button>
@@ -491,6 +621,6 @@
     </div>
 
     <!-- Main JavaScript -->
-    <script src="app.js?v=1.7"></script>
+    <script src="app.js?v=2.0"></script>
 </body>
 </html>

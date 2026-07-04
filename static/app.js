@@ -19,19 +19,42 @@ let serverConfig = {
     max_upload_mb: 10,
 };
 
+let authMode = 'login';
+const REMEMBERED_USERNAME_KEY = 'pdf_translator_remembered_username';
+
 // DOM Elements - Auth
 const authContainer = document.getElementById('auth-container');
 const appContainer = document.getElementById('app-container');
+const authCard = document.querySelector('.auth-card');
 const authForm = document.getElementById('auth-form');
-const authTitle = document.getElementById('auth-title');
+const authTabs = document.getElementById('auth-tabs');
+const authTabLogin = document.getElementById('auth-tab-login');
+const authTabRegister = document.getElementById('auth-tab-register');
 const authUsername = document.getElementById('auth-username');
 const authPassword = document.getElementById('auth-password');
+const authConfirmPassword = document.getElementById('auth-confirm-password');
+const authConfirmPasswordGroup = document.getElementById('auth-confirm-password-group');
 const authSubmitBtn = document.getElementById('auth-submit-btn');
-const authToggleBtn = document.getElementById('auth-toggle-btn');
-const authToggleWrap = document.getElementById('auth-toggle-wrap');
-const authRegistrationClosedMsg = document.getElementById('auth-registration-closed-msg');
+const authSubmitLabel = document.getElementById('auth-submit-label');
+const authSubmitSpinner = document.getElementById('auth-submit-spinner');
+const authRegistrationClosedPanel = document.getElementById('auth-registration-closed-panel');
 const authRegistrationSecretGroup = document.getElementById('auth-registration-secret-group');
 const authRegistrationSecret = document.getElementById('auth-registration-secret');
+const authLoginOptions = document.getElementById('auth-login-options');
+const authRememberMe = document.getElementById('auth-remember-me');
+const authPasswordToggle = document.getElementById('auth-password-toggle');
+const authPasswordToggleIcon = document.getElementById('auth-password-toggle-icon');
+const authPasswordStrength = document.getElementById('auth-password-strength');
+const authStrengthFill = document.getElementById('auth-strength-fill');
+const authStrengthLabel = document.getElementById('auth-strength-label');
+const authAlert = document.getElementById('auth-alert');
+const authServerBadge = document.getElementById('auth-server-badge');
+const authUsernameHint = document.getElementById('auth-username-hint');
+const changePasswordBtn = document.getElementById('change-password-btn');
+const changePasswordModal = document.getElementById('change-password-modal');
+const changePasswordForm = document.getElementById('change-password-form');
+const changePasswordClose = document.getElementById('change-password-close');
+const changePasswordError = document.getElementById('change-password-error');
 
 // DOM Elements - User Nav
 const usernameDisplay = document.getElementById('username-display');
@@ -256,12 +279,15 @@ function applyServerConfigUI() {
     }
 
     if (!serverConfig.allow_registration) {
-        authToggleWrap.style.display = 'none';
-        authRegistrationClosedMsg.style.display = 'block';
-        authTitle.textContent = 'تسجيل الدخول';
-        authSubmitBtn.textContent = 'دخول';
-        authRegistrationSecretGroup.style.display = 'none';
+        if (authTabRegister) authTabRegister.style.display = 'none';
+        if (authTabs) authTabs.style.gridTemplateColumns = '1fr';
+        if (authRegistrationClosedPanel) authRegistrationClosedPanel.hidden = false;
+        setAuthMode('login', false);
+    } else if (authRegistrationClosedPanel) {
+        authRegistrationClosedPanel.hidden = true;
     }
+
+    updateAuthServerBadge();
 
     const uploadLimitEl = document.getElementById('upload-size-limit');
     if (uploadLimitEl) {
@@ -269,38 +295,319 @@ function applyServerConfigUI() {
     }
 }
 
+function updateAuthServerBadge() {
+    if (!authServerBadge) return;
+    const storage = serverConfig.storage_backend || 'local';
+    const storageLabel = storage === 'supabase' ? 'تخزين سحابي' : storage === 's3' ? 'تخزين S3' : 'تخزين مؤقت';
+    authServerBadge.innerHTML = `<i class="fa-solid fa-circle-check"></i> متصل — ${storageLabel}`;
+}
+
 function isRegisterMode() {
-    return authTitle.textContent === 'تسجيل حساب جديد';
+    return authMode === 'register';
+}
+
+function setAuthMode(mode, focus = true) {
+    if (!serverConfig.allow_registration && mode === 'register') {
+        mode = 'login';
+    }
+    authMode = mode;
+
+    if (authTabLogin) {
+        authTabLogin.classList.toggle('active', mode === 'login');
+        authTabLogin.setAttribute('aria-selected', mode === 'login' ? 'true' : 'false');
+    }
+    if (authTabRegister) {
+        authTabRegister.classList.toggle('active', mode === 'register');
+        authTabRegister.setAttribute('aria-selected', mode === 'register' ? 'true' : 'false');
+    }
+
+    if (authSubmitLabel) {
+        authSubmitLabel.textContent = mode === 'register' ? 'إنشاء حساب' : 'دخول';
+    }
+    if (authLoginOptions) {
+        authLoginOptions.hidden = mode !== 'login';
+    }
+    if (authConfirmPasswordGroup) {
+        authConfirmPasswordGroup.hidden = mode !== 'register';
+    }
+    if (authUsernameHint) {
+        authUsernameHint.textContent = mode === 'register'
+            ? '3–50 حرفاً — حروف إنجليزية وأرقام و _ فقط'
+            : 'أدخل اسم المستخدم الذي أنشأه المسؤول';
+    }
+    if (authPassword) {
+        authPassword.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+        authPassword.placeholder = mode === 'register' ? '6 أحرف على الأقل' : 'أدخل كلمة المرور';
+    }
+    if (authPasswordStrength) {
+        authPasswordStrength.hidden = mode !== 'register';
+    }
+
+    updateRegistrationSecretVisibility();
+    clearAuthErrors();
+    clearAuthAlert();
+
+    if (focus && authUsername) {
+        authUsername.focus();
+    }
 }
 
 function updateRegistrationSecretVisibility() {
-    if (!serverConfig.allow_registration) {
-        authRegistrationSecretGroup.style.display = 'none';
-        return;
+    if (!authRegistrationSecretGroup) return;
+    const show = isRegisterMode() && serverConfig.allow_registration && serverConfig.requires_registration_secret;
+    authRegistrationSecretGroup.hidden = !show;
+    if (authRegistrationSecret) {
+        authRegistrationSecret.required = show;
     }
-    authRegistrationSecretGroup.style.display =
-        isRegisterMode() && serverConfig.requires_registration_secret ? 'block' : 'none';
+}
+
+function clearAuthAlert() {
+    if (!authAlert) return;
+    authAlert.hidden = true;
+    authAlert.textContent = '';
+    authAlert.className = 'auth-alert';
+}
+
+function showAuthAlert(message, type = 'error') {
+    if (!authAlert) return;
+    const icon = type === 'success' ? 'fa-circle-check' : type === 'info' ? 'fa-circle-info' : 'fa-triangle-exclamation';
+    authAlert.className = `auth-alert ${type}`;
+    authAlert.innerHTML = `<i class="fa-solid ${icon}"></i><span>${escapeHtml(message)}</span>`;
+    authAlert.hidden = false;
+}
+
+function clearAuthErrors() {
+    document.querySelectorAll('.auth-field-error').forEach((el) => {
+        el.hidden = true;
+        el.textContent = '';
+    });
+    [authUsername, authPassword, authConfirmPassword, authRegistrationSecret].forEach((input) => {
+        if (input) input.classList.remove('invalid');
+    });
+}
+
+function setFieldError(inputEl, errorEl, message) {
+    if (errorEl) {
+        errorEl.textContent = message;
+        errorEl.hidden = false;
+    }
+    if (inputEl) inputEl.classList.add('invalid');
+}
+
+function validateUsername(username) {
+    if (!username || username.length < 3) {
+        return 'اسم المستخدم يجب أن يكون 3 أحرف على الأقل.';
+    }
+    if (username.length > 50) {
+        return 'اسم المستخدم طويل جداً (50 حرفاً كحد أقصى).';
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+        return 'استخدم حروفاً إنجليزية وأرقاماً و _ فقط بدون مسافات.';
+    }
+    return '';
+}
+
+function validatePassword(password) {
+    if (!password || password.length < 6) {
+        return 'كلمة المرور يجب أن تكون 6 أحرف على الأقل.';
+    }
+    return '';
+}
+
+function getPasswordStrength(password) {
+    if (!password) return { score: 0, label: '', color: 'transparent' };
+    let score = 0;
+    if (password.length >= 8) score += 1;
+    if (password.length >= 12) score += 1;
+    if (/[A-Z]/.test(password)) score += 1;
+    if (/[0-9]/.test(password)) score += 1;
+    if (/[^A-Za-z0-9]/.test(password)) score += 1;
+
+    if (score <= 1) return { score: 25, label: 'ضعيفة', color: '#ef4444' };
+    if (score <= 3) return { score: 55, label: 'متوسطة', color: '#f59e0b' };
+    return { score: 100, label: 'قوية', color: '#10b981' };
+}
+
+function updatePasswordStrengthMeter() {
+    if (!authPasswordStrength || !isRegisterMode()) return;
+    const strength = getPasswordStrength(authPassword.value);
+    authPasswordStrength.hidden = !authPassword.value;
+    if (authStrengthFill) {
+        authStrengthFill.style.width = `${strength.score}%`;
+        authStrengthFill.style.background = strength.color;
+    }
+    if (authStrengthLabel) {
+        authStrengthLabel.textContent = strength.label;
+    }
+}
+
+function validateAuthForm() {
+    clearAuthErrors();
+    let valid = true;
+
+    const username = authUsername.value.trim();
+    const password = authPassword.value;
+    const usernameError = validateUsername(username);
+    if (usernameError) {
+        setFieldError(authUsername, document.getElementById('auth-username-error'), usernameError);
+        valid = false;
+    }
+
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+        setFieldError(authPassword, document.getElementById('auth-password-error'), passwordError);
+        valid = false;
+    }
+
+    if (isRegisterMode()) {
+        if (password !== authConfirmPassword.value) {
+            setFieldError(
+                authConfirmPassword,
+                document.getElementById('auth-confirm-password-error'),
+                'كلمتا المرور غير متطابقتين.'
+            );
+            valid = false;
+        }
+        if (serverConfig.requires_registration_secret && !authRegistrationSecret.value.trim()) {
+            setFieldError(
+                authRegistrationSecret,
+                document.getElementById('auth-registration-secret-error'),
+                'رمز التسجيل مطلوب.'
+            );
+            valid = false;
+        }
+    }
+
+    if (!valid && authCard) {
+        authCard.classList.remove('shake');
+        void authCard.offsetWidth;
+        authCard.classList.add('shake');
+    }
+    return valid;
+}
+
+function setAuthLoading(loading) {
+    if (!authSubmitBtn) return;
+    authSubmitBtn.disabled = loading;
+    if (authSubmitSpinner) authSubmitSpinner.hidden = !loading;
+    if (authSubmitLabel) authSubmitLabel.style.opacity = loading ? '0.85' : '1';
+}
+
+function loadRememberedUsername() {
+    const remembered = localStorage.getItem(REMEMBERED_USERNAME_KEY);
+    if (remembered && authUsername) {
+        authUsername.value = remembered;
+    }
+}
+
+function persistRememberedUsername(username) {
+    if (authRememberMe && authRememberMe.checked) {
+        localStorage.setItem(REMEMBERED_USERNAME_KEY, username);
+    } else {
+        localStorage.removeItem(REMEMBERED_USERNAME_KEY);
+    }
+}
+
+function togglePasswordVisibility() {
+    if (!authPassword || !authPasswordToggleIcon) return;
+    const show = authPassword.type === 'password';
+    authPassword.type = show ? 'text' : 'password';
+    authPasswordToggleIcon.className = show ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye';
+    if (authPasswordToggle) {
+        authPasswordToggle.setAttribute('aria-label', show ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور');
+    }
 }
 
 function initAuth() {
+    loadRememberedUsername();
+    setAuthMode('login', false);
+
     if (authToken) {
         checkTokenAndLoadApp();
     } else {
         showAuthScreen();
     }
-    
-    // Auth Form Logic
+
     authForm.addEventListener('submit', handleAuthSubmit);
-    authToggleBtn.addEventListener('click', toggleAuthMode);
-    
-    // Nav Handlers
+    authTabLogin?.addEventListener('click', () => setAuthMode('login'));
+    authTabRegister?.addEventListener('click', () => setAuthMode('register'));
+    authPasswordToggle?.addEventListener('click', togglePasswordVisibility);
+    authPassword?.addEventListener('input', updatePasswordStrengthMeter);
+
     dashboardBtn.addEventListener('click', showDashboard);
     adminBtn.addEventListener('click', showAdminPanel);
     adminBackBtn.addEventListener('click', showDashboard);
     logoutBtn.addEventListener('click', handleLogout);
-    
-    // Create project
+    changePasswordBtn?.addEventListener('click', openChangePasswordModal);
+    changePasswordClose?.addEventListener('click', closeChangePasswordModal);
+    changePasswordModal?.addEventListener('click', (e) => {
+        if (e.target === changePasswordModal) closeChangePasswordModal();
+    });
+    changePasswordForm?.addEventListener('submit', handleChangePasswordSubmit);
+
     newProjectBtn.addEventListener('click', startNewProjectWorkspace);
+}
+
+function openChangePasswordModal() {
+    if (!changePasswordModal) return;
+    changePasswordForm?.reset();
+    if (changePasswordError) changePasswordError.hidden = true;
+    changePasswordModal.style.display = 'flex';
+    changePasswordModal.setAttribute('aria-hidden', 'false');
+}
+
+function closeChangePasswordModal() {
+    if (!changePasswordModal) return;
+    changePasswordModal.style.display = 'none';
+    changePasswordModal.setAttribute('aria-hidden', 'true');
+}
+
+async function handleChangePasswordSubmit(e) {
+    e.preventDefault();
+    const current = document.getElementById('current-password')?.value || '';
+    const next = document.getElementById('new-password')?.value || '';
+    const confirm = document.getElementById('new-password-confirm')?.value || '';
+
+    if (next.length < 6) {
+        if (changePasswordError) {
+            changePasswordError.textContent = 'كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل.';
+            changePasswordError.hidden = false;
+        }
+        return;
+    }
+    if (next !== confirm) {
+        if (changePasswordError) {
+            changePasswordError.textContent = 'تأكيد كلمة المرور غير متطابق.';
+            changePasswordError.hidden = false;
+        }
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/auth/change-password', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({ current_password: current, new_password: next }),
+        });
+        const { data } = await readApiResponse(res);
+        if (res.ok && data?.success) {
+            closeChangePasswordModal();
+            showToast('تم تحديث كلمة المرور بنجاح.', 'success');
+        } else {
+            if (changePasswordError) {
+                changePasswordError.textContent = data?.detail || 'تعذر تغيير كلمة المرور.';
+                changePasswordError.hidden = false;
+            }
+        }
+    } catch {
+        if (changePasswordError) {
+            changePasswordError.textContent = 'تعذر الاتصال بالخادم.';
+            changePasswordError.hidden = false;
+        }
+    }
 }
 
 function showAuthScreen() {
@@ -351,79 +658,88 @@ async function checkTokenAndLoadApp() {
 
 function toggleAuthMode(e) {
     e.preventDefault();
-    if (!serverConfig.allow_registration) return;
-
-    if (authTitle.textContent === 'تسجيل الدخول') {
-        authTitle.textContent = 'تسجيل حساب جديد';
-        authSubmitBtn.textContent = 'إنشاء حساب';
-        authToggleBtn.textContent = 'تسجيل الدخول بدلاً من ذلك';
-    } else {
-        authTitle.textContent = 'تسجيل الدخول';
-        authSubmitBtn.textContent = 'دخول';
-        authToggleBtn.textContent = 'سجل الآن';
-    }
-    updateRegistrationSecretVisibility();
+    setAuthMode(isRegisterMode() ? 'login' : 'register');
 }
 
 async function handleAuthSubmit(e) {
     e.preventDefault();
+    clearAuthAlert();
+    if (!validateAuthForm()) return;
+
     const username = authUsername.value.trim();
     const password = authPassword.value;
-    
-    const isRegister = isRegisterMode();
-    const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
-    
+    setAuthLoading(true);
+
     try {
-        if (isRegister) {
+        if (isRegisterMode()) {
             const payload = { username, password };
             if (serverConfig.requires_registration_secret) {
                 payload.registration_secret = authRegistrationSecret.value.trim();
             }
-            const res = await fetch(endpoint, {
+            const res = await fetch('/api/auth/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
             });
-            const data = await res.json();
-            if (res.ok && data.success) {
-                showToast('تم التسجيل بنجاح! جاري تسجيل الدخول...', 'success');
-                // Automatically log in
-                authTitle.textContent = 'تسجيل الدخول';
-                authSubmitBtn.textContent = 'دخول';
-                authToggleBtn.textContent = 'سجل الآن';
-                handleLoginFlow(username, password);
+            const { data } = await readApiResponse(res);
+            if (res.ok && data?.success) {
+                showAuthAlert('تم إنشاء الحساب بنجاح! جاري تسجيل الدخول...', 'success');
+                setAuthMode('login', false);
+                await handleLoginFlow(username, password, false);
             } else {
-                showToast(data.detail || 'فشل التسجيل.', 'error');
+                showAuthAlert(data?.detail || 'فشل إنشاء الحساب.', 'error');
             }
         } else {
-            await handleLoginFlow(username, password);
+            await handleLoginFlow(username, password, true);
         }
-    } catch (err) {
-        showToast('حدث خطأ أثناء التوثيق.', 'error');
+    } catch {
+        showAuthAlert('تعذر الاتصال بالخادم. تحقق من الإنترنت أو جرّب لاحقاً.', 'error');
+    } finally {
+        setAuthLoading(false);
     }
 }
 
-async function handleLoginFlow(username, password) {
+async function handleLoginFlow(username, password, showSuccessToast = true) {
     const formData = new URLSearchParams();
     formData.append('username', username);
     formData.append('password', password);
-    
-    const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData
-    });
-    
-    const data = await res.json().catch(() => ({}));
-    if (res.ok && data.access_token) {
+
+    let res;
+    try {
+        res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: formData,
+        });
+    } catch {
+        showAuthAlert('تعذر الاتصال بالخادم. تأكد أنك تستخدم الرابط الصحيح للتطبيق.', 'error');
+        return;
+    }
+
+    const { data } = await readApiResponse(res);
+    if (res.ok && data?.access_token) {
         authToken = data.access_token;
         localStorage.setItem('auth_token', authToken);
-        showToast('تم تسجيل الدخول بنجاح!', 'success');
-        authUsername.value = '';
+        persistRememberedUsername(username);
+        if (showSuccessToast) {
+            showToast('تم تسجيل الدخول بنجاح!', 'success');
+        }
         authPassword.value = '';
+        if (authConfirmPassword) authConfirmPassword.value = '';
+        clearAuthErrors();
+        clearAuthAlert();
         checkTokenAndLoadApp();
     } else {
-        showToast(data.detail || 'اسم المستخدم أو كلمة المرور غير صحيحة.', 'error');
+        const message = data?.detail || 'اسم المستخدم أو كلمة المرور غير صحيحة.';
+        showAuthAlert(message, 'error');
+        setFieldError(authPassword, document.getElementById('auth-password-error'), message);
+        if (authCard) {
+            authCard.classList.remove('shake');
+            void authCard.offsetWidth;
+            authCard.classList.add('shake');
+        }
+        authPassword.focus();
+        authPassword.select();
     }
 }
 
@@ -432,6 +748,8 @@ function handleLogout() {
     currentUserIsAdmin = false;
     adminBtn.style.display = 'none';
     localStorage.removeItem('auth_token');
+    closeChangePasswordModal();
+    setAuthMode('login', false);
     showAuthScreen();
 }
 
