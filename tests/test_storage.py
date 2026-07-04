@@ -11,3 +11,13 @@ def test_s3_ref_helpers():
 def test_extract_object_name_from_legacy_url():
     url = "http://localhost:9000/pdf-translator-assets/audio/file.mp3"
     assert extract_object_name(url) == "audio/file.mp3"
+
+
+def test_supabase_ref_helpers():
+    from storage import is_sb_ref, make_sb_ref, parse_sb_ref
+
+    ref = make_sb_ref("media", "audio/test.mp3")
+    assert is_sb_ref(ref)
+    bucket, path = parse_sb_ref(ref)
+    assert bucket == "media"
+    assert path == "audio/test.mp3"

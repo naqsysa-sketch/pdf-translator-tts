@@ -1,13 +1,24 @@
 import os
 import asyncio
+import concurrent.futures
 import logging
 from celery import Celery
 from database import SessionLocal
 import models
 from utils import extract_chapters_from_pdf, translate_text_to_arabic, generate_tts_edge
-from storage import upload_file_to_s3, is_s3_ref
+from storage import upload_file_to_s3, is_s3_ref, is_sb_ref, get_outputs_dir, download_stored_file_to_path
 
 logger = logging.getLogger("pdf_translator.tasks")
+
+
+def run_async(coro):
+    """Run async code from sync Celery tasks (safe inside FastAPI event loop on Vercel)."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 # Broker configuration: Defaults to local Redis, but can point to docker network redis service
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -23,8 +34,17 @@ celery_app.conf.update(
     task_always_eager=os.getenv("CELERY_TASK_ALWAYS_EAGER", "false").lower() == "true",
 )
 
+UPLOAD_DIR = "/tmp/uploads" if os.getenv("VERCEL") else os.path.join(os.path.dirname(__file__), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 @celery_app.task
-def process_pdf_task(project_id: str, pdf_path: str, source_lang: str = "auto"):
+def process_pdf_task(
+    project_id: str,
+    pdf_path: str,
+    source_lang: str = "auto",
+    page_from: int | None = None,
+    page_to: int | None = None,
+):
     """
     Extracts chapters from the PDF file in the background, stores text to database,
     and updates project status.
@@ -40,7 +60,12 @@ def process_pdf_task(project_id: str, pdf_path: str, source_lang: str = "auto"):
         db.commit()
         
         # Extract chapters
-        chapters = extract_chapters_from_pdf(pdf_path, source_lang=source_lang)
+        chapters = extract_chapters_from_pdf(
+            pdf_path,
+            source_lang=source_lang,
+            page_from=page_from,
+            page_to=page_to,
+        )
         
         for ch in chapters:
             db_chapter = models.Chapter(
@@ -56,9 +81,19 @@ def process_pdf_task(project_id: str, pdf_path: str, source_lang: str = "auto"):
             db.add(db_chapter)
             
         project.status = "completed"
+
+        if os.path.exists(pdf_path):
+            try:
+                project.pdf_storage_ref = upload_file_to_s3(
+                    pdf_path,
+                    f"pdfs/{project_id}.pdf",
+                    "application/pdf",
+                )
+            except Exception as exc:
+                logger.warning(f"Could not archive PDF for project {project_id}: {exc}")
+
         db.commit()
-        
-        # Clean up local uploaded raw PDF file
+
         if os.path.exists(pdf_path):
             os.remove(pdf_path)
             
@@ -76,6 +111,67 @@ def process_pdf_task(project_id: str, pdf_path: str, source_lang: str = "auto"):
     finally:
         db.close()
 
+
+@celery_app.task
+def reextract_pdf_task(
+    project_id: str,
+    page_from: int | None = None,
+    page_to: int | None = None,
+    source_lang: str = "auto",
+):
+    """Re-split an archived PDF using an optional page range."""
+    db = SessionLocal()
+    pdf_path = os.path.join(UPLOAD_DIR, f"{project_id}_reextract.pdf")
+    try:
+        project = db.query(models.Project).filter(models.Project.id == project_id).first()
+        if not project or not project.pdf_storage_ref:
+            logger.error(f"Project {project_id} has no archived PDF.")
+            return False
+
+        if not download_stored_file_to_path(project.pdf_storage_ref, pdf_path):
+            raise RuntimeError("تعذر تحميل ملف PDF المؤرشف.")
+
+        db.query(models.Chapter).filter(models.Chapter.project_id == project_id).delete()
+        db.commit()
+
+        chapters = extract_chapters_from_pdf(
+            pdf_path,
+            source_lang=source_lang,
+            page_from=page_from,
+            page_to=page_to,
+        )
+
+        for ch in chapters:
+            db.add(
+                models.Chapter(
+                    chapter_num=ch["id"],
+                    project_id=project_id,
+                    title=ch["title"],
+                    original_text=ch["text"],
+                    translation_status="pending",
+                    tts_status="pending",
+                    start_page=ch["start_page"],
+                    end_page=ch["end_page"],
+                )
+            )
+
+        project.status = "completed"
+        db.commit()
+        logger.info(f"Re-extracted {len(chapters)} chapters for project {project_id}")
+        return True
+    except Exception as exc:
+        logger.error(f"Re-extract failed for project {project_id}: {exc}")
+        project = db.query(models.Project).filter(models.Project.id == project_id).first()
+        if project:
+            project.status = "failed"
+            db.commit()
+        raise exc
+    finally:
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
+        db.close()
+
+
 @celery_app.task
 def translate_chapter_task(chapter_id: int, engine: str, api_key: str = None, model: str = None, custom_host: str = None):
     """
@@ -92,7 +188,7 @@ def translate_chapter_task(chapter_id: int, engine: str, api_key: str = None, mo
         db.commit()
         
         # Run async translation function inside a synchronous worker using asyncio.run
-        translated_text, method, warning = asyncio.run(
+        translated_text, method, warning = run_async(
             translate_text_to_arabic(
                 text=chapter.original_text,
                 engine=engine,
@@ -140,8 +236,7 @@ def generate_tts_task(chapter_id: int, voice: str, rate: str):
         chapter.tts_status = "processing"
         db.commit()
         
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        outputs_dir = os.path.join(base_dir, "static", "outputs")
+        outputs_dir = get_outputs_dir()
         os.makedirs(outputs_dir, exist_ok=True)
         
         import hashlib
@@ -153,7 +248,7 @@ def generate_tts_task(chapter_id: int, voice: str, rate: str):
         local_vtt_path = os.path.join(outputs_dir, f"{file_hash}.vtt")
         
         # Generate edge-tts audio and subtitles
-        asyncio.run(
+        run_async(
             generate_tts_edge(
                 text=chapter.translated_text,
                 voice=voice,
@@ -179,7 +274,7 @@ def generate_tts_task(chapter_id: int, voice: str, rate: str):
         db.commit()
         
         # Clean up local temporary files if they were uploaded to cloud storage
-        if is_s3_ref(s3_audio_url):
+        if is_s3_ref(s3_audio_url) or is_sb_ref(s3_audio_url):
             if os.path.exists(local_mp3_path):
                 os.remove(local_mp3_path)
             if os.path.exists(local_vtt_path):

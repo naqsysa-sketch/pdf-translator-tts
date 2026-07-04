@@ -34,11 +34,33 @@ def all_server_api_keys_configured() -> bool:
     return all(engines[key] for key in ("gemini", "deepl", "openai", "claude"))
 
 
+def get_max_upload_bytes() -> int:
+    raw_mb = os.getenv("MAX_UPLOAD_MB", "").strip()
+    if raw_mb:
+        return int(float(raw_mb) * 1024 * 1024)
+    # Vercel serverless rejects request bodies above ~4.5 MB before the app runs.
+    if os.getenv("VERCEL"):
+        return 4 * 1024 * 1024
+    return 10 * 1024 * 1024
+
+
 def get_public_config() -> dict:
     registration_secret = get_registration_secret()
+    max_upload_bytes = get_max_upload_bytes()
+    from storage import supabase_storage_configured
+
+    storage_backend = "local"
+    if supabase_storage_configured():
+        storage_backend = "supabase"
+    elif os.getenv("S3_ACCESS_KEY") and os.getenv("S3_SECRET_KEY"):
+        storage_backend = "s3"
+
     return {
         "allow_registration": is_registration_allowed(),
         "requires_registration_secret": bool(registration_secret),
         "configured_engines": get_configured_engines(),
         "hide_client_api_keys": all_server_api_keys_configured(),
+        "max_upload_bytes": max_upload_bytes,
+        "max_upload_mb": round(max_upload_bytes / (1024 * 1024), 1),
+        "storage_backend": storage_backend,
     }

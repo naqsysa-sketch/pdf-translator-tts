@@ -9,10 +9,14 @@ let pollingInterval = null;
 let isBulkProcessing = false;
 let bulkAbortRequested = false;
 let currentUserIsAdmin = false;
+let selectedChapterIds = new Set();
+let projectHasStoredPdf = false;
 let serverConfig = {
     allow_registration: true,
     requires_registration_secret: false,
-    configured_engines: {}
+    configured_engines: {},
+    max_upload_bytes: 10 * 1024 * 1024,
+    max_upload_mb: 10,
 };
 
 // DOM Elements - Auth
@@ -97,6 +101,15 @@ const emptyState = document.getElementById('empty-state');
 const chaptersCard = document.getElementById('chapters-card');
 const chaptersListTbody = document.getElementById('chapters-list-tbody');
 const translateAllBtn = document.getElementById('translate-all-btn');
+const translateSelectedBtn = document.getElementById('translate-selected-btn');
+const ttsSelectedBtn = document.getElementById('tts-selected-btn');
+const selectAllChaptersCheckbox = document.getElementById('select-all-chapters');
+const pageFromInput = document.getElementById('page-from-input');
+const pageToInput = document.getElementById('page-to-input');
+const reextractPanel = document.getElementById('reextract-panel');
+const reextractPageFrom = document.getElementById('reextract-page-from');
+const reextractPageTo = document.getElementById('reextract-page-to');
+const reextractBtn = document.getElementById('reextract-btn');
 const stopAllBtn = document.getElementById('stop-all-btn');
 const exportZipBtn = document.getElementById('export-zip-btn');
 const exportAudiobookBtn = document.getElementById('export-audiobook-btn');
@@ -147,8 +160,60 @@ async function loadServerConfig() {
     }
 }
 
-function isEngineKeyConfigured(engine) {
-    return !!(serverConfig.configured_engines && serverConfig.configured_engines[engine]);
+function getMaxUploadBytes() {
+    return serverConfig.max_upload_bytes || (10 * 1024 * 1024);
+}
+
+function formatUploadLimitMb() {
+    const mb = serverConfig.max_upload_mb ?? (getMaxUploadBytes() / (1024 * 1024));
+    return Number.isInteger(mb) ? String(mb) : String(mb);
+}
+
+async function readApiResponse(res) {
+    const text = await res.text();
+    if (!text) return { data: null, text: '' };
+    try {
+        return { data: JSON.parse(text), text };
+    } catch {
+        return { data: null, text };
+    }
+}
+
+function describeUploadFailure(res, text) {
+    if (res.status === 413 || /request entity too large/i.test(text)) {
+        return `حجم الملف كبير جداً. الحد الأقصى على هذه الاستضافة هو ${formatUploadLimitMb()} ميجابايت.`;
+    }
+    return text || `خطأ من الخادم (${res.status})`;
+}
+
+function updateSelectionButtons() {
+    const count = selectedChapterIds.size;
+    if (translateSelectedBtn) translateSelectedBtn.disabled = count === 0 || isBulkProcessing;
+    if (ttsSelectedBtn) ttsSelectedBtn.disabled = count === 0 || isBulkProcessing;
+}
+
+function syncSelectAllCheckbox() {
+    if (!selectAllChaptersCheckbox || chaptersData.length === 0) {
+        if (selectAllChaptersCheckbox) selectAllChaptersCheckbox.checked = false;
+        return;
+    }
+    const allSelected = chaptersData.every(ch => selectedChapterIds.has(ch.id));
+    selectAllChaptersCheckbox.checked = allSelected;
+}
+
+function getSelectedChapters() {
+    if (selectedChapterIds.size === 0) return [];
+    return chaptersData.filter(ch => selectedChapterIds.has(ch.id));
+}
+
+function toggleChapterSelection(chapterId, checked) {
+    if (checked) {
+        selectedChapterIds.add(chapterId);
+    } else {
+        selectedChapterIds.delete(chapterId);
+    }
+    updateSelectionButtons();
+    syncSelectAllCheckbox();
 }
 
 function setEngineKeyUI(engine, keyGroupId, badgeId) {
@@ -194,6 +259,11 @@ function applyServerConfigUI() {
         authTitle.textContent = 'تسجيل الدخول';
         authSubmitBtn.textContent = 'دخول';
         authRegistrationSecretGroup.style.display = 'none';
+    }
+
+    const uploadLimitEl = document.getElementById('upload-size-limit');
+    if (uploadLimitEl) {
+        uploadLimitEl.textContent = `الحد الأقصى لحجم الملف: ${formatUploadLimitMb()} ميجابايت`;
     }
 }
 
@@ -570,19 +640,26 @@ function startNewProjectWorkspace() {
     emptyState.style.display = 'flex';
     chaptersCard.style.display = 'none';
     translationPreviewCard.style.display = 'none';
+    selectedChapterIds.clear();
+    if (selectAllChaptersCheckbox) selectAllChaptersCheckbox.checked = false;
+    updateSelectionButtons();
+    if (reextractPanel) reextractPanel.style.display = 'none';
 }
 
 function openProject(projectId) {
+    stopPolling();
+    selectedChapterIds.clear();
+    if (selectAllChaptersCheckbox) selectAllChaptersCheckbox.checked = false;
+    updateSelectionButtons();
     currentProjectId = projectId;
     dashboardCard.style.display = 'none';
     workspaceGrid.style.display = 'grid';
-    uploadCard.style.display = 'none'; // hide upload section for loaded projects
-    
+    uploadCard.style.display = 'none';
+
     emptyState.style.display = 'flex';
     chaptersCard.style.display = 'none';
     translationPreviewCard.style.display = 'none';
-    
-    // Start fetching and polling
+
     fetchProjectDetails();
     startPolling();
 }
@@ -647,7 +724,15 @@ async function fetchProjectDetails() {
         
         // Render Chapters List
         chaptersData = project.chapters;
+        projectHasStoredPdf = !!project.has_stored_pdf;
+        if (reextractPanel) {
+            reextractPanel.style.display = projectHasStoredPdf ? 'block' : 'none';
+        }
+        const knownIds = new Set(chaptersData.map(ch => ch.id));
+        selectedChapterIds = new Set([...selectedChapterIds].filter(id => knownIds.has(id)));
         renderChaptersList();
+        updateSelectionButtons();
+        syncSelectAllCheckbox();
         
         emptyState.style.display = 'none';
         chaptersCard.style.display = 'block';
@@ -663,6 +748,10 @@ async function fetchProjectDetails() {
             if (activeChapter) {
                 // Update translation view if status changed
                 const textarea = document.getElementById('translated-text-view');
+                const originalView = document.getElementById('original-text-view');
+                if (originalView && originalView.textContent !== activeChapter.original_text) {
+                    originalView.textContent = activeChapter.original_text;
+                }
                 if (activeChapter.translation_status === 'completed' && textarea.value !== activeChapter.translated_text) {
                     textarea.value = activeChapter.translated_text;
                     translationMethodBadge.textContent = `بواسطة ${activeChapter.translation_engine}`;
@@ -732,11 +821,13 @@ function renderChaptersList() {
             ttsBadge = '<span class="badge danger">فشل</span>';
         }
         
+        const checked = selectedChapterIds.has(ch.id) ? 'checked' : '';
         const isSelected = (idx === activeChapterIndex);
         const tr = document.createElement('tr');
         if (isSelected) tr.classList.add('active-row');
         
         tr.innerHTML = `
+            <td class="col-select"><input type="checkbox" class="chapter-select" data-id="${ch.id}" ${checked}></td>
             <td><strong>${ch.chapter_num}</strong></td>
             <td><span class="chapter-title-span">${escapeHtml(ch.title)}</span></td>
             <td style="font-family: var(--font-en); font-size: 0.9rem;">${ch.start_page} - ${ch.end_page}</td>
@@ -758,6 +849,12 @@ function renderChaptersList() {
         `;
         chaptersListTbody.appendChild(tr);
     });
+
+    chaptersListTbody.querySelectorAll('.chapter-select').forEach(box => {
+        box.addEventListener('change', (e) => {
+            toggleChapterSelection(Number(e.target.dataset.id), e.target.checked);
+        });
+    });
 }
 
 function showChapterPreview(index) {
@@ -778,6 +875,9 @@ function showChapterPreview(index) {
     if (chapter.translation_status === 'completed') {
         translationMethodBadge.textContent = `بواسطة ${chapter.translation_engine}`;
         translationMethodBadge.style.display = 'inline-block';
+        if (chapter.translation_warning) {
+            showToast(chapter.translation_warning, 'warning');
+        }
     } else {
         translationMethodBadge.style.display = 'none';
     }
@@ -956,9 +1056,9 @@ function handleFileSelect(file) {
         return;
     }
     
-    const MAX_FILE_SIZE = 10 * 1024 * 1024;
-    if (file.size > MAX_FILE_SIZE) {
-        showToast('حجم الملف كبير جداً. الحد الأقصى المسموح به هو 10 ميجابايت.', 'error');
+    const maxFileSize = getMaxUploadBytes();
+    if (file.size > maxFileSize) {
+        showToast(`حجم الملف كبير جداً. الحد الأقصى المسموح به هو ${formatUploadLimitMb()} ميجابايت.`, 'error');
         return;
     }
     
@@ -987,6 +1087,12 @@ async function uploadPDFFile(file) {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('source_lang', sourceLangSelect.value);
+    if (pageFromInput && pageFromInput.value) {
+        formData.append('page_from', pageFromInput.value);
+    }
+    if (pageToInput && pageToInput.value) {
+        formData.append('page_to', pageToInput.value);
+    }
     
     showToast('جاري رفع ومعالجة ملف الـ PDF في الخلفية...', 'info');
     
@@ -996,14 +1102,15 @@ async function uploadPDFFile(file) {
             headers: { 'Authorization': `Bearer ${authToken}` },
             body: formData
         });
-        
-        const data = await res.json();
-        if (res.ok && data.success) {
+
+        const { data, text } = await readApiResponse(res);
+        if (res.ok && data?.success) {
             currentProjectId = data.project_id;
             showToast('تم رفع الكتاب وبدأت التجزئة في الخلفية!', 'success');
             startPolling();
         } else {
-            throw new Error(data.detail || 'حدث خطأ غير معروف');
+            const detail = data?.detail || describeUploadFailure(res, text);
+            throw new Error(detail);
         }
     } catch (err) {
         showToast(`فشل رفع الملف: ${err.message}`, 'error');
@@ -1025,11 +1132,14 @@ function resetBulkUI() {
     isBulkProcessing = false;
     bulkAbortRequested = false;
     translateAllBtn.disabled = false;
+    if (translateSelectedBtn) translateSelectedBtn.disabled = selectedChapterIds.size === 0;
+    if (ttsSelectedBtn) ttsSelectedBtn.disabled = selectedChapterIds.size === 0;
     stopAllBtn.disabled = false;
     stopAllBtn.style.display = 'none';
     bulkProgressContainer.style.display = 'none';
     bulkProgressBar.style.width = '0%';
     bulkProgressPercent.textContent = '0%';
+    updateSelectionButtons();
 }
 
 async function waitForChapterStep(chapterId, step, timeoutMs = 300000) {
@@ -1048,40 +1158,48 @@ async function waitForChapterStep(chapterId, step, timeoutMs = 300000) {
     return false;
 }
 
-translateAllBtn.addEventListener('click', async () => {
-    if (isBulkProcessing || chaptersData.length === 0) return;
+async function runBulkPipeline(targetChapters, { doTranslate = true, doTts = true } = {}) {
+    if (isBulkProcessing || targetChapters.length === 0) return;
 
     isBulkProcessing = true;
     bulkAbortRequested = false;
     translateAllBtn.disabled = true;
+    if (translateSelectedBtn) translateSelectedBtn.disabled = true;
+    if (ttsSelectedBtn) ttsSelectedBtn.disabled = true;
     stopAllBtn.style.display = 'inline-flex';
     bulkProgressContainer.style.display = 'block';
     startPolling();
 
-    const chaptersNeedingTranslation = chaptersData.filter(
-        ch => ch.translation_status !== 'completed' && ch.translation_status !== 'processing'
-    ).length;
-    const chaptersNeedingTts = chaptersData.filter(
-        ch => ch.translation_status === 'completed' && ch.tts_status !== 'completed' && ch.tts_status !== 'processing'
-    ).length;
+    let chaptersNeedingTranslation = 0;
+    let chaptersNeedingTts = 0;
+    if (doTranslate) {
+        chaptersNeedingTranslation = targetChapters.filter(
+            ch => ch.translation_status !== 'completed' && ch.translation_status !== 'processing'
+        ).length;
+    }
+    if (doTts) {
+        chaptersNeedingTts = targetChapters.filter(
+            ch => ch.translation_status === 'completed' && ch.tts_status !== 'completed' && ch.tts_status !== 'processing'
+        ).length;
+    }
     const totalSteps = chaptersNeedingTranslation + chaptersNeedingTts;
     let completedSteps = 0;
 
-    updateBulkProgress(0, totalSteps, 'بدء المعالجة الجماعية...');
-    showToast('بدأت ترجمة وتوليد الصوت لكافة الفصول بالتوالي.', 'info');
+    updateBulkProgress(0, totalSteps, 'بدء المعالجة...');
 
-    for (let i = 0; i < chaptersData.length; i++) {
+    for (let i = 0; i < targetChapters.length; i++) {
         if (bulkAbortRequested) break;
 
-        let chapter = chaptersData[i];
+        let chapter = targetChapters[i];
+        const idx = chaptersData.findIndex(ch => ch.id === chapter.id);
 
-        if (chapter.translation_status !== 'completed' && chapter.translation_status !== 'processing') {
-            updateBulkProgress(completedSteps, totalSteps, `ترجمة الفصل ${chapter.chapter_num} من ${chaptersData.length}...`);
-            await translateChapter(chapter.id, i);
+        if (doTranslate && chapter.translation_status !== 'completed' && chapter.translation_status !== 'processing') {
+            updateBulkProgress(completedSteps, totalSteps, `ترجمة الفصل ${chapter.chapter_num}...`);
+            await translateChapter(chapter.id, idx);
             const translated = await waitForChapterStep(chapter.id, 'translation');
             if (!translated) {
                 if (!bulkAbortRequested) {
-                    showToast(`توقفت المعالجة عند الفصل ${chapter.chapter_num} بسبب فشل الترجمة أو انتهاء المهلة.`, 'error');
+                    showToast(`توقفت المعالجة عند الفصل ${chapter.chapter_num}.`, 'error');
                 }
                 break;
             }
@@ -1091,13 +1209,13 @@ translateAllBtn.addEventListener('click', async () => {
 
         if (bulkAbortRequested) break;
 
-        if (chapter.translation_status === 'completed' && chapter.tts_status !== 'completed' && chapter.tts_status !== 'processing') {
-            updateBulkProgress(completedSteps, totalSteps, `توليد الصوت للفصل ${chapter.chapter_num} من ${chaptersData.length}...`);
-            await generateTTS(chapter.id, i);
+        if (doTts && chapter.translation_status === 'completed' && chapter.tts_status !== 'completed' && chapter.tts_status !== 'processing') {
+            updateBulkProgress(completedSteps, totalSteps, `توليد الصوت للفصل ${chapter.chapter_num}...`);
+            await generateTTS(chapter.id, idx);
             const voiced = await waitForChapterStep(chapter.id, 'tts');
             if (!voiced) {
                 if (!bulkAbortRequested) {
-                    showToast(`توقفت المعالجة عند الفصل ${chapter.chapter_num} بسبب فشل TTS أو انتهاء المهلة.`, 'error');
+                    showToast(`توقفت المعالجة عند الفصل ${chapter.chapter_num} (TTS).`, 'error');
                 }
                 break;
             }
@@ -1106,15 +1224,92 @@ translateAllBtn.addEventListener('click', async () => {
     }
 
     if (bulkAbortRequested) {
-        showToast('تم إيقاف المعالجة الجماعية.', 'info');
-    } else if (completedSteps === totalSteps) {
+        showToast('تم إيقاف المعالجة.', 'info');
+    } else if (totalSteps > 0 && completedSteps === totalSteps) {
         updateBulkProgress(totalSteps, totalSteps, 'اكتملت المعالجة بنجاح!');
-        showToast('اكتملت معالجة جميع الفصول الممكنة!', 'success');
+        showToast('اكتملت معالجة الفصول المحددة!', 'success');
     }
 
     resetBulkUI();
     await fetchProjectDetails();
+}
+
+translateAllBtn.addEventListener('click', async () => {
+    if (chaptersData.length === 0) return;
+    showToast('بدأت ترجمة وتوليد الصوت لكافة الفصول.', 'info');
+    await runBulkPipeline(chaptersData, { doTranslate: true, doTts: true });
 });
+
+if (translateSelectedBtn) {
+    translateSelectedBtn.addEventListener('click', async () => {
+        const selected = getSelectedChapters();
+        if (selected.length === 0) {
+            showToast('حدد فصلاً واحداً على الأقل.', 'warning');
+            return;
+        }
+        showToast(`بدأت ترجمة ${selected.length} فصل محدد.`, 'info');
+        await runBulkPipeline(selected, { doTranslate: true, doTts: false });
+    });
+}
+
+if (ttsSelectedBtn) {
+    ttsSelectedBtn.addEventListener('click', async () => {
+        const selected = getSelectedChapters().filter(ch => ch.translation_status === 'completed');
+        if (selected.length === 0) {
+            showToast('حدد فصولاً مترجمة لتوليد الصوت.', 'warning');
+            return;
+        }
+        showToast(`بدأ توليد الصوت لـ ${selected.length} فصل.`, 'info');
+        await runBulkPipeline(selected, { doTranslate: false, doTts: true });
+    });
+}
+
+if (selectAllChaptersCheckbox) {
+    selectAllChaptersCheckbox.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            chaptersData.forEach(ch => selectedChapterIds.add(ch.id));
+        } else {
+            selectedChapterIds.clear();
+        }
+        renderChaptersList();
+        updateSelectionButtons();
+    });
+}
+
+if (reextractBtn) {
+    reextractBtn.addEventListener('click', async () => {
+        if (!currentProjectId || !projectHasStoredPdf) return;
+        if (!confirm('سيتم حذف الفصول الحالية وإعادة تقسيم الكتاب. هل تريد المتابعة؟')) return;
+
+        const body = {};
+        if (reextractPageFrom && reextractPageFrom.value) body.page_from = Number(reextractPageFrom.value);
+        if (reextractPageTo && reextractPageTo.value) body.page_to = Number(reextractPageTo.value);
+
+        reextractBtn.disabled = true;
+        try {
+            const res = await fetch(`/api/projects/${currentProjectId}/re-extract`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`
+                },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                selectedChapterIds.clear();
+                showToast('بدأت إعادة تقسيم الكتاب...', 'info');
+                startPolling();
+            } else {
+                showToast(data.detail || 'فشل إعادة التقسيم.', 'error');
+            }
+        } catch (err) {
+            showToast('فشل الاتصال بالخادم.', 'error');
+        } finally {
+            reextractBtn.disabled = false;
+        }
+    });
+}
 
 stopAllBtn.addEventListener('click', () => {
     if (!isBulkProcessing) return;

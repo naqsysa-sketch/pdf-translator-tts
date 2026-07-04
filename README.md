@@ -13,6 +13,7 @@
 - **GitHub:** https://github.com/naqsysa-sketch/pdf-translator-tts
 - **Vercel (تجريبي):** https://pdf-translator-tts.vercel.app
 - **الإنتاج الكامل:** راجع [DEPLOY.md](DEPLOY.md) لـ `pmi-edu.com`
+- **Supabase (قاعدة بيانات سحابية):** راجع [SUPABASE.md](SUPABASE.md)
 
 ## التشغيل السريع (محلي)
 

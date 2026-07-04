@@ -5,6 +5,7 @@ import fitz
 import pytest
 
 from utils import (
+    assess_translation_completeness,
     calculate_text_hash,
     chunk_text,
     extract_chapters_from_pdf,
@@ -60,6 +61,47 @@ def test_chunk_text_respects_max_chars():
     chunks = chunk_text(text, max_chars=10)
     assert len(chunks) >= 2
     assert all(len(chunk) <= 10 for chunk in chunks)
+
+
+def test_chunk_text_splits_oversized_paragraph():
+    long_para = ("كلمة " * 400).strip()
+    chunks = chunk_text(long_para, max_chars=500)
+    assert len(chunks) >= 3
+    assert all(len(chunk) <= 500 for chunk in chunks)
+    rejoined = " ".join(chunks)
+    assert len(rejoined) >= len(long_para) - 50
+
+
+def test_incomplete_translation_not_cached_or_reused():
+    source = "A" * 500
+    partial = "ترجمة قصيرة"
+    save_translation_to_cache(source, partial, "google", "")
+    cached_text, _ = get_cached_translation(source, "google")
+    assert cached_text is None
+    assert assess_translation_completeness(source, partial)
+
+
+def test_complete_translation_is_cached():
+    source = "Short sample paragraph for translation testing."
+    translated = "فقرة نموذجية قصيرة لاختبار الترجمة."
+    save_translation_to_cache(source, translated, "google", "")
+    cached_text, cached_method = get_cached_translation(source, "google")
+    assert cached_text == translated
+    assert cached_method == "google"
+
+
+def test_extract_chapters_page_range(tmp_path):
+    pdf_path = tmp_path / "pages.pdf"
+    doc = fitz.open()
+    for i in range(1, 6):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"Page {i} content for chapter extraction test.")
+    doc.save(pdf_path)
+    doc.close()
+
+    chapters = extract_chapters_from_pdf(str(pdf_path), page_from=2, page_to=4)
+    assert chapters
+    assert all(2 <= ch["start_page"] <= 4 for ch in chapters)
 
 
 def test_extract_chapters_from_pdf_by_heading(tmp_path):

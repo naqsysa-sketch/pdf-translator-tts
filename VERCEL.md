@@ -6,7 +6,7 @@ Vercel مناسب كـ **عرض تجريبي**. للإنتاج الكامل (Cel
 
 على Vercel:
 - المهام تُنفَّذ **متزامنة** (`CELERY_TASK_ALWAYS_EAGER=true`)
-- قاعدة البيانات: SQLite مؤقتة في `/tmp`
+- **قاعدة البيانات:** استخدم [Supabase](SUPABASE.md) (موصى به) بدلاً من SQLite المؤقتة
 - بدون MinIO — الملفات الصوتية محلية مؤقتة
 - حد زمني للطلب (~60 ثانية على Pro)
 
@@ -23,7 +23,8 @@ ALLOWED_ORIGINS=https://your-project.vercel.app
 ALLOW_REGISTRATION=false
 ADMIN_USERNAMES=admin
 CELERY_TASK_ALWAYS_EAGER=true
-DATABASE_URL=sqlite:////tmp/pdf_translator.db
+# Supabase (pooler 6543) — راجع SUPABASE.md
+DATABASE_URL=postgresql://postgres.hsqkkpcyriklncdysgpn:[PASSWORD]@aws-0-REGION.pooler.supabase.com:6543/postgres?sslmode=require
 GEMINI_API_KEY=...
 ```
 

@@ -20,6 +20,7 @@ class Project(Base):
     status = Column(String(50), default="processing", nullable=False)  # uploading, processing, completed, failed
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=func.now(), nullable=False)
+    pdf_storage_ref = Column(Text, nullable=True)
 
     user = relationship("User", back_populates="projects")
     chapters = relationship("Chapter", back_populates="project", cascade="all, delete-orphan")

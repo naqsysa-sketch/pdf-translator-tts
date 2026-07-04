@@ -32,3 +32,17 @@ def test_claude_key_from_anthropic_alias(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     engines = config.get_configured_engines()
     assert engines["claude"] is True
+
+
+def test_max_upload_bytes_on_vercel(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("MAX_UPLOAD_MB", raising=False)
+    assert config.get_max_upload_bytes() == 4 * 1024 * 1024
+    payload = config.get_public_config()
+    assert payload["max_upload_mb"] == 4
+
+
+def test_max_upload_bytes_override(monkeypatch):
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setenv("MAX_UPLOAD_MB", "25")
+    assert config.get_max_upload_bytes() == 25 * 1024 * 1024

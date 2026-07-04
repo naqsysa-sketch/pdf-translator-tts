@@ -1162,3 +1162,43 @@ textarea.text-content:focus {
     white-space: nowrap;
     vertical-align: middle;
 }
+
+.chapters-table .col-select {
+    width: 42px;
+    text-align: center;
+}
+
+.chapters-table input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.page-range-group,
+.reextract-panel {
+    margin-top: 12px;
+}
+
+.page-range-inputs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.page-range-inputs .form-control {
+    width: 90px;
+    min-width: 70px;
+}
+
+.page-range-sep {
+    color: var(--text-muted, #94a3b8);
+}
+
+.reextract-panel {
+    margin: 12px 0 4px;
+    padding: 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}

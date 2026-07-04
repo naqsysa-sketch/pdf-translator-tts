@@ -149,7 +149,7 @@
                     <div class="upload-zone" id="upload-zone">
                         <i class="fa-solid fa-cloud-arrow-up upload-icon"></i>
                         <p class="upload-text">اسحب ملف الـ PDF هنا أو اضغط للتصفح</p>
-                        <span class="file-limit">الحد الأقصى لحجم الملف: 10 ميجابايت</span>
+                        <span class="file-limit" id="upload-size-limit">الحد الأقصى لحجم الملف: 10 ميجابايت</span>
                         <input type="file" id="file-input" accept=".pdf" style="display: none;">
                     </div>
                     <!-- Source Language Selector -->
@@ -164,6 +164,15 @@
                             <option value="de">الألمانية (German)</option>
                             <option value="it">الإيطالية (Italian)</option>
                         </select>
+                    </div>
+                    <div class="form-group page-range-group">
+                        <label><i class="fa-solid fa-book-open"></i> نطاق الصفحات (اختياري):</label>
+                        <div class="page-range-inputs">
+                            <input type="number" id="page-from-input" class="form-control" min="1" placeholder="من">
+                            <span class="page-range-sep">—</span>
+                            <input type="number" id="page-to-input" class="form-control" min="1" placeholder="إلى">
+                        </div>
+                        <small class="text-muted">اتركه فارغاً لمعالجة الكتاب كاملاً</small>
                     </div>
                     <div id="file-info" class="file-info" style="display: none;">
                         <i class="fa-solid fa-file-pdf file-pdf-icon"></i>
@@ -361,11 +370,24 @@
                     <div class="card-header-flex">
                         <h2 class="card-title"><i class="fa-solid fa-list-ol"></i> فصول الكتاب المكتشفة</h2>
                         <div class="header-buttons">
-                            <button id="translate-all-btn" class="btn btn-primary"><i class="fa-solid fa-globe"></i> ترجمة وتحويل الكل</button>
+                            <button id="translate-selected-btn" class="btn btn-primary" disabled><i class="fa-solid fa-check-double"></i> ترجمة المحدد</button>
+                            <button id="tts-selected-btn" class="btn btn-emerald" disabled><i class="fa-solid fa-volume-high"></i> صوت للمحدد</button>
+                            <button id="translate-all-btn" class="btn btn-secondary"><i class="fa-solid fa-globe"></i> ترجمة وتحويل الكل</button>
                             <button id="stop-all-btn" class="btn btn-secondary danger" style="display: none;"><i class="fa-solid fa-circle-stop"></i> إيقاف</button>
                             <button id="export-zip-btn" class="btn btn-secondary"><i class="fa-solid fa-file-zipper"></i> تصدير ZIP</button>
                             <button id="export-audiobook-btn" class="btn btn-secondary"><i class="fa-solid fa-music"></i> تصدير كتاب صوتي</button>
                         </div>
+                    </div>
+
+                    <div id="reextract-panel" class="reextract-panel" style="display: none;">
+                        <label><i class="fa-solid fa-scissors"></i> إعادة تقسيم بنطاق صفحات:</label>
+                        <div class="page-range-inputs">
+                            <input type="number" id="reextract-page-from" class="form-control" min="1" placeholder="من">
+                            <span class="page-range-sep">—</span>
+                            <input type="number" id="reextract-page-to" class="form-control" min="1" placeholder="إلى">
+                            <button id="reextract-btn" class="btn btn-sm btn-secondary"><i class="fa-solid fa-rotate"></i> إعادة التقسيم</button>
+                        </div>
+                        <small class="text-muted">يحذف الفصول الحالية ويعيد استخراجها من PDF المؤرشف</small>
                     </div>
                     
                     <!-- Progress Bar Container -->
@@ -383,6 +405,7 @@
                         <table class="chapters-table">
                             <thead>
                                 <tr>
+                                    <th class="col-select"><input type="checkbox" id="select-all-chapters" title="تحديد الكل"></th>
                                     <th>رقم الفصل</th>
                                     <th>العنوان</th>
                                     <th>النطاق (الصفحات)</th>

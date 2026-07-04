@@ -118,6 +118,29 @@ def calculate_text_hash(text: str) -> str:
     """
     return hashlib.sha256(text.encode('utf-8', errors='ignore')).hexdigest()
 
+TRANSLATION_ERROR_MARKER = "[خطأ أثناء الترجمة"
+
+
+def assess_translation_completeness(source: str, translated: str) -> str | None:
+    """Return a user-facing warning when translation looks truncated or failed."""
+    if not source or not source.strip():
+        return None
+    if not translated or not translated.strip():
+        return "الترجمة فارغة — قد يكون النص المصدر طويلاً جداً أو فشلت خدمة الترجمة."
+    if TRANSLATION_ERROR_MARKER in translated:
+        return "فشلت ترجمة جزء من النص. أعد المحاولة أو استخدم محركاً آخر."
+    src_len = len(source.strip())
+    tr_len = len(translated.strip())
+    if src_len >= 200:
+        ratio = tr_len / src_len
+        if ratio < 0.2:
+            return (
+                f"الترجمة تبدو ناقصة ({tr_len} حرفاً مقابل {src_len} في المصدر). "
+                "أعد الترجمة أو جرّب محركاً آخر."
+            )
+    return None
+
+
 def get_cached_translation(text: str, engine: str, model: str = None) -> tuple[str | None, str | None]:
     """
     Retrieves translation from cache if hit conditions are met.
@@ -141,6 +164,9 @@ def get_cached_translation(text: str, engine: str, model: str = None) -> tuple[s
         cached_text = cache_data.get("translated_text")
         
         if not cached_text:
+            return None, None
+
+        if assess_translation_completeness(text, cached_text):
             return None, None
             
         # Cache Hit Conditions:
@@ -166,6 +192,8 @@ def save_translation_to_cache(text: str, translated_text: str, method: str, mode
     """
     Saves translated text to the cache directory.
     """
+    if assess_translation_completeness(text, translated_text):
+        return
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         text_hash = calculate_text_hash(text)
@@ -183,7 +211,30 @@ def save_translation_to_cache(text: str, translated_text: str, method: str, mode
     except Exception as e:
         logger.error(f"Error saving to cache: {e}")
 
-def extract_chapters_from_pdf(pdf_path: str, source_lang: str = "auto"):
+def _clip_pdf_to_page_range(doc, page_from: int | None, page_to: int | None):
+    """Return a document limited to inclusive 1-based page range."""
+    import fitz
+
+    total = len(doc)
+    if page_from is None and page_to is None:
+        return doc
+    start = max(1, int(page_from or 1))
+    end = min(total, int(page_to or total))
+    if start > end:
+        doc.close()
+        raise ValueError(f"نطاق الصفحات غير صالح: من {start} إلى {end} (المجموع {total}).")
+    clipped = fitz.open()
+    clipped.insert_pdf(doc, from_page=start - 1, to_page=end - 1)
+    doc.close()
+    return clipped
+
+
+def extract_chapters_from_pdf(
+    pdf_path: str,
+    source_lang: str = "auto",
+    page_from: int | None = None,
+    page_to: int | None = None,
+):
     """
     Extracts text from a PDF file and splits it into chapters.
     Tries Table of Contents (TOC) first, then scans for chapter regex patterns, 
@@ -193,13 +244,17 @@ def extract_chapters_from_pdf(pdf_path: str, source_lang: str = "auto"):
     import fitz  # PyMuPDF — lazy import for serverless compatibility
 
     doc = fitz.open(pdf_path)
+    page_offset = 0
+    if page_from is not None or page_to is not None:
+        page_offset = max(1, int(page_from or 1)) - 1
+    doc = _clip_pdf_to_page_range(doc, page_from, page_to)
     toc = doc.get_toc()  # format: [[level, title, page], ...]
     chapters = []
 
     # Check if PDF contains actual text or if it's scanned
     total_chars = 0
     for page in doc:
-        total_chars += len(page.get_text().strip())
+        total_chars += len(page.get_text("text", sort=True).strip())
         
     ocr_page_texts = None
     if total_chars < 150:
@@ -211,7 +266,7 @@ def extract_chapters_from_pdf(pdf_path: str, source_lang: str = "auto"):
     def get_page_text(page_idx):
         if ocr_page_texts and page_idx < len(ocr_page_texts):
             return ocr_page_texts[page_idx]
-        return doc[page_idx].get_text()
+        return doc[page_idx].get_text("text", sort=True)
 
     # 1. Try splitting using Table of Contents (TOC)
     if toc:
@@ -230,7 +285,7 @@ def extract_chapters_from_pdf(pdf_path: str, source_lang: str = "auto"):
                 
             chapter_text = ""
             for page_num in range(start_page, end_page):
-                chapter_text += get_page_text(page_num)
+                chapter_text += get_page_text(page_num) + "\n"
             
             chapters.append({
                 "id": i + 1,
@@ -300,8 +355,8 @@ def extract_chapters_from_pdf(pdf_path: str, source_lang: str = "auto"):
             end_idx = min(i + chunk_size, len(doc))
             chapter_text = ""
             for p in range(i, end_idx):
-                chapter_text += get_page_text(p)
-            
+                chapter_text += get_page_text(p) + "\n"
+
             chapters.append({
                 "id": len(chapters) + 1,
                 "title": f"الجزء {len(chapters) + 1} (صفحة {i+1}-{end_idx})",
@@ -310,6 +365,12 @@ def extract_chapters_from_pdf(pdf_path: str, source_lang: str = "auto"):
                 "end_page": end_idx
             })
 
+    if page_offset:
+        for ch in chapters:
+            ch["start_page"] += page_offset
+            ch["end_page"] += page_offset
+
+    doc.close()
     return chapters
 
 def translate_text_with_gemini(text: str, api_key: str, model: str = "gemini-3.5-flash") -> str:
@@ -353,25 +414,80 @@ def translate_text_with_gemini(text: str, api_key: str, model: str = "gemini-3.5
     except (KeyError, IndexError) as e:
         raise ValueError(f"Invalid API response format: {e}")
 
+def _split_long_paragraph(para: str, max_chars: int) -> list[str]:
+    """Break a single paragraph that exceeds max_chars without dropping text."""
+    if len(para) <= max_chars:
+        return [para]
+
+    sentences = re.split(r'(?<=[.!?؟…:])\s+', para)
+    if len(sentences) <= 1:
+        parts = []
+        remaining = para
+        while len(remaining) > max_chars:
+            cut = remaining.rfind(" ", 0, max_chars)
+            if cut < max_chars // 2:
+                cut = max_chars
+            parts.append(remaining[:cut].strip())
+            remaining = remaining[cut:].strip()
+        if remaining:
+            parts.append(remaining)
+        return parts
+
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences:
+        if not sentence:
+            continue
+        if len(sentence) > max_chars:
+            if current.strip():
+                chunks.append(current.strip())
+                current = ""
+            chunks.extend(_split_long_paragraph(sentence, max_chars))
+            continue
+        sep = 1 if current else 0
+        if len(current) + sep + len(sentence) <= max_chars:
+            current = f"{current} {sentence}".strip() if current else sentence
+        else:
+            if current.strip():
+                chunks.append(current.strip())
+            current = sentence
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks
+
+
 def chunk_text(text: str, max_chars: int) -> list[str]:
     """
-    Splits text into chunks of maximum character length.
+    Splits text into chunks of maximum character length, including long paragraphs.
     """
-    paragraphs = text.split('\n')
-    chunks = []
+    if max_chars < 1:
+        max_chars = 3500
+
+    paragraphs = text.split("\n")
+    chunks: list[str] = []
     current_chunk = ""
-    
+
+    def flush() -> None:
+        nonlocal current_chunk
+        if current_chunk.strip():
+            chunks.append(current_chunk.strip())
+        current_chunk = ""
+
     for para in paragraphs:
-        if len(current_chunk) + len(para) + 1 < max_chars:
-            current_chunk = (current_chunk + "\n" + para).strip()
-        else:
-            if current_chunk.strip():
-                chunks.append(current_chunk.strip())
-            current_chunk = para + "\n"
-            
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-        
+        parts = _split_long_paragraph(para, max_chars) if len(para) > max_chars else [para]
+        for part in parts:
+            if not part:
+                continue
+            sep = 1 if current_chunk else 0
+            if len(current_chunk) + sep + len(part) <= max_chars:
+                current_chunk = f"{current_chunk}\n{part}".strip() if current_chunk else part
+            else:
+                flush()
+                current_chunk = part
+
+    flush()
+    if not chunks and text.strip():
+        return [text.strip()]
     return chunks
 
 def translate_text_with_deepl(text: str, api_key: str) -> str:
@@ -521,7 +637,16 @@ async def translate_text_to_arabic(text: str, engine: str, api_key: str = None, 
     cached_text, cached_method = get_cached_translation(text, engine, model)
     if cached_text:
         logger.info(f"Cache HIT: Loaded translation from cache using {cached_method}")
-        return cached_text, cached_method, ""
+        warning = assess_translation_completeness(text, cached_text) or ""
+        return cached_text, cached_method, warning
+        
+    def finalize(translated_text: str, method: str, warning: str = "") -> tuple[str, str, str]:
+        completeness = assess_translation_completeness(text, translated_text)
+        if completeness:
+            warning = f"{warning} {completeness}".strip() if warning else completeness
+        if translated_text and not assess_translation_completeness(text, translated_text):
+            save_translation_to_cache(text, translated_text, method, model or "")
+        return translated_text, method, warning
         
     # Translate
     try:
@@ -532,8 +657,7 @@ async def translate_text_to_arabic(text: str, engine: str, api_key: str = None, 
             tasks = [asyncio.to_thread(translate_text_with_gemini, c, api_key, model) for c in chunks]
             translated_chunks = await asyncio.gather(*tasks)
             translated_text = "\n\n".join(translated_chunks)
-            save_translation_to_cache(text, translated_text, "gemini", model)
-            return translated_text, "gemini", ""
+            return finalize(translated_text, "gemini", "")
             
         elif engine == "deepl":
             if not api_key or not api_key.strip():
@@ -542,8 +666,7 @@ async def translate_text_to_arabic(text: str, engine: str, api_key: str = None, 
             tasks = [asyncio.to_thread(translate_text_with_deepl, c, api_key) for c in chunks]
             translated_chunks = await asyncio.gather(*tasks)
             translated_text = "\n\n".join(translated_chunks)
-            save_translation_to_cache(text, translated_text, "deepl", "")
-            return translated_text, "deepl", ""
+            return finalize(translated_text, "deepl", "")
             
         elif engine == "openai":
             if not api_key or not api_key.strip():
@@ -552,8 +675,7 @@ async def translate_text_to_arabic(text: str, engine: str, api_key: str = None, 
             tasks = [asyncio.to_thread(translate_text_with_openai, c, api_key, model) for c in chunks]
             translated_chunks = await asyncio.gather(*tasks)
             translated_text = "\n\n".join(translated_chunks)
-            save_translation_to_cache(text, translated_text, "openai", model)
-            return translated_text, "openai", ""
+            return finalize(translated_text, "openai", "")
             
         elif engine == "claude":
             if not api_key or not api_key.strip():
@@ -562,8 +684,7 @@ async def translate_text_to_arabic(text: str, engine: str, api_key: str = None, 
             tasks = [asyncio.to_thread(translate_text_with_claude, c, api_key, model) for c in chunks]
             translated_chunks = await asyncio.gather(*tasks)
             translated_text = "\n\n".join(translated_chunks)
-            save_translation_to_cache(text, translated_text, "claude", model)
-            return translated_text, "claude", ""
+            return finalize(translated_text, "claude", "")
             
         elif engine == "libretranslate":
             host = custom_host if custom_host else "https://libretranslate.de"
@@ -571,53 +692,50 @@ async def translate_text_to_arabic(text: str, engine: str, api_key: str = None, 
             tasks = [asyncio.to_thread(translate_text_with_libretranslate, c, host, api_key) for c in chunks]
             translated_chunks = await asyncio.gather(*tasks)
             translated_text = "\n\n".join(translated_chunks)
-            save_translation_to_cache(text, translated_text, "libretranslate", "")
-            return translated_text, "libretranslate", ""
+            return finalize(translated_text, "libretranslate", "")
             
     except Exception as e:
         logger.warning(f"Translation engine {engine} failed: {e}. Falling back to Google Translate...")
         warning = f"فشلت الترجمة باستخدام {engine} بسبب: {str(e)}. تم استخدام مترجم جوجل كبديل."
-        translated_text, method, _ = await translate_text_to_arabic_google(text)
-        save_translation_to_cache(text, translated_text, "google", "")
-        return translated_text, "google", warning
+        translated_text, method, google_warning = await translate_text_to_arabic_google(text)
+        if google_warning:
+            warning = f"{warning} {google_warning}".strip()
+        return finalize(translated_text, method or "google", warning)
 
     # Fallback to google directly if "google" engine is selected
     translated_text, method, warning = await translate_text_to_arabic_google(text)
-    if translated_text:
-        save_translation_to_cache(text, translated_text, "google", "")
-    return translated_text, method, warning
+    return finalize(translated_text, method, warning)
 
 async def translate_text_to_arabic_google(text: str) -> tuple[str, str, str]:
     """
     Translates text to Arabic using Google Translate (via deep-translator).
+    Chunks are translated sequentially with retries to avoid rate-limit drops.
     """
     translator = GoogleTranslator(source='auto', target='ar')
-    max_chars = 3500
-    paragraphs = text.split('\n')
-    chunks = []
-    current_chunk = ""
-    
-    for para in paragraphs:
-        if len(current_chunk) + len(para) + 1 < max_chars:
-            current_chunk += para + "\n"
+    chunks = chunk_text(text, 3000)
+    translated_chunks: list[str] = []
+
+    for index, chunk in enumerate(chunks):
+        last_error = None
+        for attempt in range(4):
+            try:
+                result = await asyncio.to_thread(translator.translate, chunk)
+                if result and result.strip():
+                    translated_chunks.append(result.strip())
+                    break
+            except Exception as e:
+                last_error = e
+                await asyncio.sleep(0.8 * (attempt + 1))
         else:
-            if current_chunk.strip():
-                chunks.append(current_chunk.strip())
-            current_chunk = para + "\n"
-            
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-        
-    async def translate_chunk(chunk):
-        try:
-            return await asyncio.to_thread(translator.translate, chunk)
-        except Exception as e:
-            logger.error(f"Translation chunk error: {e}")
-            return f"\n[خطأ أثناء الترجمة: {str(e)}]\n"
-            
-    tasks = [translate_chunk(chunk) for chunk in chunks]
-    translated_chunks = await asyncio.gather(*tasks)
-    return "\n".join(translated_chunks), "google", ""
+            logger.error(f"Translation chunk {index + 1}/{len(chunks)} failed: {last_error}")
+            translated_chunks.append(f"\n{TRANSLATION_ERROR_MARKER}: {last_error}]\n")
+
+        if index + 1 < len(chunks):
+            await asyncio.sleep(0.35)
+
+    translated_text = "\n\n".join(translated_chunks)
+    warning = assess_translation_completeness(text, translated_text) or ""
+    return translated_text, "google", warning
 
 def time_to_seconds(t_str: str) -> float:
     try:
@@ -670,7 +788,13 @@ async def generate_tts_edge(text: str, voice: str, output_path: str, rate: str =
     and generates matching synchronized VTT subtitles.
     """
     if AudioSegment is None:
-        raise ValueError("Audio processing (pydub/ffmpeg) is not available in this environment.")
+        import edge_tts
+
+        if not text.strip():
+            raise ValueError("Text content is empty.")
+        await edge_tts.Communicate(text[:3000], voice, rate=rate).save(output_path)
+        logger.info(f"Generated TTS (simple mode, no ffmpeg) to {output_path}")
+        return
     import edge_tts
 
     if not text.strip():
@@ -743,7 +867,14 @@ async def generate_tts_edge(text: str, voice: str, output_path: str, rate: str =
                     current_offset_ms += 1000
             except Exception as e:
                 logger.error(f"Error decoding TTS chunk or VTT: {e}")
-                
+
+    if len(combined_audio) == 0:
+        import edge_tts
+
+        await edge_tts.Communicate(text[:3000], voice, rate=rate).save(output_path)
+        logger.info(f"Generated TTS (simple fallback) to {output_path}")
+        return
+
     if len(combined_audio) > 0:
         # Export as single clean MP3 file
         combined_audio.export(output_path, format="mp3")
@@ -754,5 +885,3 @@ async def generate_tts_edge(text: str, voice: str, output_path: str, rate: str =
             with open(vtt_path, "w", encoding="utf-8") as f:
                 f.write("\n\n".join(vtt_parts))
             logger.info(f"Successfully generated matched VTT subtitles to {vtt_path}")
-    else:
-        raise ValueError("No audio content was generated.")

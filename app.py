@@ -27,7 +27,7 @@ if SENTRY_DSN:
 logger = logging.getLogger("pdf_translator.server")
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Depends, status
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 import models
-from database import engine, get_db
+from database import engine, get_db, ensure_schema_updates
 from auth import (
     get_password_hash,
     verify_password,
@@ -46,13 +46,25 @@ from auth import (
     get_current_admin,
     is_admin_user,
 )
-from config import get_public_config, get_registration_secret, is_registration_allowed
-from tasks import process_pdf_task, translate_chapter_task, generate_tts_task
+from config import (
+    get_max_upload_bytes,
+    get_public_config,
+    get_registration_secret,
+    is_registration_allowed,
+)
+from tasks import process_pdf_task, translate_chapter_task, generate_tts_task, reextract_pdf_task
 from utils import generate_tts_edge
-from storage import upload_file_to_s3, resolve_media_url, read_stored_file, is_s3_ref
+from storage import (
+    upload_file_to_s3,
+    resolve_media_url,
+    read_stored_file,
+    is_s3_ref,
+    get_outputs_dir,
+)
 
 # Ensure database tables exist
 models.Base.metadata.create_all(bind=engine)
+ensure_schema_updates()
 
 class RateLimiter:
     def __init__(self):
@@ -124,11 +136,30 @@ app.add_middleware(RateLimitMiddleware)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-OUTPUT_DIR = "/tmp/outputs" if os.getenv("VERCEL") else os.path.join(STATIC_DIR, "outputs")
+OUTPUT_DIR = get_outputs_dir()
 UPLOAD_DIR = "/tmp/uploads" if os.getenv("VERCEL") else os.path.join(BASE_DIR, "uploads")
 
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+@app.get("/api/media/{filename}")
+def serve_media_file(filename: str):
+    """Serve generated audio/subtitles from writable storage (required on Vercel /tmp)."""
+    import re
+
+    if not re.fullmatch(r"[\w.\-]+", filename):
+        raise HTTPException(status_code=404, detail="الملف غير موجود.")
+    path = os.path.join(OUTPUT_DIR, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="الملف غير موجود.")
+    if filename.endswith(".mp3"):
+        media_type = "audio/mpeg"
+    elif filename.endswith(".vtt"):
+        media_type = "text/vtt"
+    else:
+        media_type = "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=filename)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Pydantic Schemas
@@ -185,6 +216,11 @@ class TTSRequest(BaseModel):
 
 class ChapterUpdateRequest(BaseModel):
     translated_text: str
+
+
+class ReExtractRequest(BaseModel):
+    page_from: Optional[int] = None
+    page_to: Optional[int] = None
 
 
 def serialize_chapter(chapter: models.Chapter) -> dict:
@@ -248,6 +284,7 @@ def get_project(project_id: str, current_user: models.User = Depends(get_current
         "filename": project.filename,
         "status": project.status,
         "created_at": project.created_at.isoformat(),
+        "has_stored_pdf": bool(project.pdf_storage_ref),
         "chapters": [serialize_chapter(c) for c in chapters]
     }
 
@@ -256,34 +293,39 @@ async def upload_pdf(
     request: Request,
     file: UploadFile = File(...),
     source_lang: str = Form("auto"),
+    page_from: Optional[int] = Form(None),
+    page_to: Optional[int] = Form(None),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     content_length = request.headers.get("content-length")
-    MAX_FILE_SIZE = 10 * 1024 * 1024
+    max_file_size = get_max_upload_bytes()
+    max_mb = round(max_file_size / (1024 * 1024), 1)
+    size_error = f"حجم الملف كبير جداً. الحد الأقصى المسموح به هو {max_mb:g} ميجابايت."
     if content_length:
         try:
-            if int(content_length) > MAX_FILE_SIZE:
-                raise HTTPException(
-                    status_code=413,
-                    detail="حجم الملف كبير جداً. الحد الأقصى المسموح به هو 10 ميجابايت."
-                )
+            if int(content_length) > max_file_size:
+                raise HTTPException(status_code=413, detail=size_error)
         except ValueError:
             pass
 
     file.file.seek(0, 2)
     actual_size = file.file.tell()
     file.file.seek(0)
-    
-    if actual_size > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail="حجم الملف كبير جداً. الحد الأقصى المسموح به هو 10 ميجابايت."
-        )
+
+    if actual_size > max_file_size:
+        raise HTTPException(status_code=413, detail=size_error)
 
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
     
+    if page_from is not None and page_from < 1:
+        raise HTTPException(status_code=400, detail="رقم صفحة البداية يجب أن يكون 1 أو أكثر.")
+    if page_to is not None and page_to < 1:
+        raise HTTPException(status_code=400, detail="رقم صفحة النهاية يجب أن يكون 1 أو أكثر.")
+    if page_from is not None and page_to is not None and page_from > page_to:
+        raise HTTPException(status_code=400, detail="صفحة البداية يجب أن تكون أصغر من أو تساوي صفحة النهاية.")
+
     project_id = str(uuid.uuid4())
     pdf_path = os.path.join(UPLOAD_DIR, f"{project_id}.pdf")
     
@@ -299,12 +341,52 @@ async def upload_pdf(
     db.add(project)
     db.commit()
     
-    process_pdf_task.delay(project_id, pdf_path, source_lang)
+    process_pdf_task.delay(project_id, pdf_path, source_lang, page_from, page_to)
     
     return {
         "success": True,
         "project_id": project_id,
-        "filename": file.filename
+        "filename": file.filename,
+        "page_from": page_from,
+        "page_to": page_to,
+    }
+
+
+@app.post("/api/projects/{project_id}/re-extract")
+def reextract_project(
+    project_id: str,
+    request: ReExtractRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = db.query(models.Project).filter(
+        models.Project.id == project_id,
+        models.Project.user_id == current_user.id,
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="المشروع غير موجود.")
+    if not project.pdf_storage_ref:
+        raise HTTPException(
+            status_code=400,
+            detail="ملف PDF الأصلي غير محفوظ لهذا المشروع. ارفع الكتاب مجدداً مع تخزين سحابي مفعّل.",
+        )
+    if request.page_from is not None and request.page_from < 1:
+        raise HTTPException(status_code=400, detail="رقم صفحة البداية غير صالح.")
+    if request.page_to is not None and request.page_to < 1:
+        raise HTTPException(status_code=400, detail="رقم صفحة النهاية غير صالح.")
+    if (
+        request.page_from is not None
+        and request.page_to is not None
+        and request.page_from > request.page_to
+    ):
+        raise HTTPException(status_code=400, detail="نطاق الصفحات غير صالح.")
+
+    project.status = "processing"
+    db.commit()
+    reextract_pdf_task.delay(project_id, request.page_from, request.page_to)
+    return {
+        "success": True,
+        "message": "بدأت إعادة تقسيم الكتاب حسب نطاق الصفحات المحدد.",
     }
 
 @app.patch("/api/chapters/{chapter_id}")
