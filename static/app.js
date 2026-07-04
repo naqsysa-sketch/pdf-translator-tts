@@ -169,10 +169,25 @@ const toastIcon = document.getElementById('toast-icon');
 document.addEventListener('DOMContentLoaded', async () => {
     await loadServerConfig();
     applyServerConfigUI();
-    initAuth();
+    await initAuth();
     initSettingsListeners();
     loadSavedSettings();
 });
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 45000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            throw new Error('انتهت مهلة الاتصال بالخادم. أعد المحاولة.');
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 async function loadServerConfig() {
     try {
@@ -501,7 +516,10 @@ function validateAuthForm() {
 function setAuthLoading(loading) {
     if (!authSubmitBtn) return;
     authSubmitBtn.disabled = loading;
-    if (authSubmitSpinner) authSubmitSpinner.hidden = !loading;
+    if (authSubmitSpinner) {
+        authSubmitSpinner.hidden = !loading;
+        authSubmitSpinner.style.display = loading ? 'inline-block' : 'none';
+    }
     if (authSubmitLabel) authSubmitLabel.style.opacity = loading ? '0.85' : '1';
 }
 
@@ -530,15 +548,10 @@ function togglePasswordVisibility() {
     }
 }
 
-function initAuth() {
+async function initAuth() {
     loadRememberedUsername();
     setAuthMode('login', false);
-
-    if (authToken) {
-        checkTokenAndLoadApp();
-    } else {
-        showAuthScreen();
-    }
+    showAuthScreen();
 
     authForm.addEventListener('submit', handleAuthSubmit);
     authTabLogin?.addEventListener('click', () => setAuthMode('login'));
@@ -558,6 +571,15 @@ function initAuth() {
     changePasswordForm?.addEventListener('submit', handleChangePasswordSubmit);
 
     newProjectBtn.addEventListener('click', startNewProjectWorkspace);
+
+    if (authToken) {
+        setAuthLoading(true);
+        try {
+            await checkTokenAndLoadApp();
+        } finally {
+            setAuthLoading(false);
+        }
+    }
 }
 
 function openChangePasswordModal() {
@@ -647,10 +669,14 @@ function showAdminPanel() {
 }
 
 async function checkTokenAndLoadApp() {
+    if (!authToken) {
+        showAuthScreen();
+        return false;
+    }
     try {
-        const res = await fetch('/api/auth/me', {
-            headers: { 'Authorization': `Bearer ${authToken}` }
-        });
+        const res = await fetchWithTimeout('/api/auth/me', {
+            headers: { 'Authorization': `Bearer ${authToken}` },
+        }, 30000);
         if (res.ok) {
             const data = await res.json();
             currentUserIsAdmin = !!data.is_admin;
@@ -659,12 +685,17 @@ async function checkTokenAndLoadApp() {
             authContainer.style.display = 'none';
             appContainer.style.display = 'block';
             showDashboard();
-        } else {
-            handleLogout();
+            return true;
         }
+        authToken = null;
+        localStorage.removeItem('auth_token');
+        showAuthScreen();
+        showAuthAlert('انتهت الجلسة. سجّل الدخول مجدداً.', 'info');
+        return false;
     } catch (err) {
-        showToast('فشل الاتصال بالخادم الرئيسي.', 'error');
-        handleLogout();
+        showAuthAlert(err.message || 'فشل الاتصال بالخادم الرئيسي.', 'error');
+        showAuthScreen();
+        return false;
     }
 }
 
@@ -688,7 +719,7 @@ async function handleAuthSubmit(e) {
             if (serverConfig.requires_registration_secret) {
                 payload.registration_secret = authRegistrationSecret.value.trim();
             }
-            const res = await fetch('/api/auth/register', {
+            const res = await fetchWithTimeout('/api/auth/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
@@ -704,8 +735,8 @@ async function handleAuthSubmit(e) {
         } else {
             await handleLoginFlow(username, password, true);
         }
-    } catch {
-        showAuthAlert('تعذر الاتصال بالخادم. تحقق من الإنترنت أو جرّب لاحقاً.', 'error');
+    } catch (err) {
+        showAuthAlert(err.message || 'تعذر الاتصال بالخادم. تحقق من الإنترنت أو جرّب لاحقاً.', 'error');
     } finally {
         setAuthLoading(false);
     }
@@ -718,14 +749,14 @@ async function handleLoginFlow(username, password, showSuccessToast = true) {
 
     let res;
     try {
-        res = await fetch('/api/auth/login', {
+        res = await fetchWithTimeout('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: formData,
-        });
-    } catch {
-        showAuthAlert('تعذر الاتصال بالخادم. تأكد أنك تستخدم الرابط الصحيح للتطبيق.', 'error');
-        return;
+        }, 45000);
+    } catch (err) {
+        showAuthAlert(err.message || 'تعذر الاتصال بالخادم. تأكد أنك تستخدم الرابط الصحيح للتطبيق.', 'error');
+        return false;
     }
 
     const { data } = await readApiResponse(res);
@@ -733,26 +764,30 @@ async function handleLoginFlow(username, password, showSuccessToast = true) {
         authToken = data.access_token;
         localStorage.setItem('auth_token', authToken);
         persistRememberedUsername(username);
-        if (showSuccessToast) {
-            showToast('تم تسجيل الدخول بنجاح!', 'success');
-        }
         authPassword.value = '';
         if (authConfirmPassword) authConfirmPassword.value = '';
         clearAuthErrors();
         clearAuthAlert();
-        checkTokenAndLoadApp();
-    } else {
-        const message = data?.detail || 'اسم المستخدم أو كلمة المرور غير صحيحة.';
-        showAuthAlert(message, 'error');
-        setFieldError(authPassword, document.getElementById('auth-password-error'), message);
-        if (authCard) {
-            authCard.classList.remove('shake');
-            void authCard.offsetWidth;
-            authCard.classList.add('shake');
+
+        const loaded = await checkTokenAndLoadApp();
+        if (loaded) {
+            if (showSuccessToast) showToast('تم تسجيل الدخول بنجاح!', 'success');
+            return true;
         }
-        authPassword.focus();
-        authPassword.select();
+        showAuthAlert('تعذر تحميل الحساب بعد الدخول. أعد المحاولة.', 'error');
+        return false;
     }
+
+    const message = data?.detail || 'اسم المستخدم أو كلمة المرور غير صحيحة.';
+    showAuthAlert(message, 'error');
+    setFieldError(authPassword, document.getElementById('auth-password-error'), message);
+    if (authCard) {
+        authCard.classList.remove('shake');
+        void authCard.offsetWidth;
+        authCard.classList.add('shake');
+    }
+    authPassword.focus();
+    return false;
 }
 
 function handleLogout() {
